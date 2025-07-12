@@ -16,8 +16,17 @@ from pathlib import Path
 from typing import Dict, List, Any, Optional
 import logging
 
-# Set up logging
-logging.basicConfig(level=logging.INFO)
+# Set up logging to file instead of stderr to avoid MCP protocol interference
+log_file = Path(tempfile.gettempdir()) / "sandbox_mcp_server.log"
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(log_file),
+        # Only use console handler for critical errors
+        logging.StreamHandler(sys.stderr) if os.getenv('SANDBOX_MCP_DEBUG') else logging.NullHandler()
+    ]
+)
 logger = logging.getLogger(__name__)
 
 # Create FastMCP server named "python-sandbox"
@@ -101,10 +110,26 @@ class ExecutionContext:
         logger.info(f"VIRTUAL_ENV: {os.environ.get('VIRTUAL_ENV', 'Not set')}")
     
     def create_artifacts_dir(self) -> str:
-        """Create a temporary directory for execution artifacts."""
+        """Create a structured directory for execution artifacts within the project."""
         execution_id = str(uuid.uuid4())[:8]
-        self.artifacts_dir = Path(tempfile.gettempdir()) / f"sandbox_artifacts_{execution_id}"
+        # Create artifacts directory within project
+        artifacts_root = self.project_root / "artifacts"
+        artifacts_root.mkdir(exist_ok=True)
+        
+        # Create session-specific directory with timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_dir = f"session_{timestamp}_{execution_id}"
+        
+        self.artifacts_dir = artifacts_root / session_dir
         self.artifacts_dir.mkdir(exist_ok=True)
+        
+        # Create subdirectories for different artifact types
+        (self.artifacts_dir / "plots").mkdir(exist_ok=True)
+        (self.artifacts_dir / "images").mkdir(exist_ok=True)
+        (self.artifacts_dir / "animations").mkdir(exist_ok=True)
+        (self.artifacts_dir / "files").mkdir(exist_ok=True)
+        
         return str(self.artifacts_dir)
     
     def cleanup_artifacts(self):
@@ -126,7 +151,9 @@ def monkey_patch_matplotlib():
         
         def patched_show(*args, **kwargs):
             if ctx.artifacts_dir:
-                figure_path = ctx.artifacts_dir / f"plot_{uuid.uuid4().hex[:8]}.png"
+                plots_dir = ctx.artifacts_dir / "plots"
+                plots_dir.mkdir(exist_ok=True)
+                figure_path = plots_dir / f"plot_{uuid.uuid4().hex[:8]}.png"
                 plt.savefig(figure_path, dpi=150, bbox_inches='tight')
                 logger.info(f"Plot saved to: {figure_path}")
             return original_show(*args, **kwargs)
@@ -135,6 +162,85 @@ def monkey_patch_matplotlib():
         return True
     except ImportError:
         return False
+
+def execute_manim_code(manim_code: str, quality: str = 'medium_quality') -> Dict[str, Any]:
+    """Execute Manim code and save animation to artifacts directory."""
+    if not ctx.artifacts_dir:
+        ctx.create_artifacts_dir()
+    
+    # Create a subdirectory for this specific animation
+    animation_id = str(uuid.uuid4())[:8]
+    manim_dir = ctx.artifacts_dir / f"manim_{animation_id}"
+    manim_dir.mkdir(exist_ok=True)
+    
+    script_path = manim_dir / "scene.py"
+    
+    result = {
+        'success': False,
+        'output': '',
+        'error': None,
+        'video_path': None,
+        'animation_id': animation_id,
+        'artifacts_dir': str(manim_dir)
+    }
+    
+    try:
+        # Write the Manim script
+        with open(script_path, 'w') as f:
+            f.write(manim_code)
+        
+        # Determine quality flags
+        quality_flags = {
+            'low_quality': ['-ql'],
+            'medium_quality': ['-qm'],
+            'high_quality': ['-qh'],
+            'production_quality': ['-qp']
+        }.get(quality, ['-qm'])
+        
+        # Execute Manim using virtual environment path
+        manim_executable = ctx.venv_path / 'bin' / 'manim'
+        if not manim_executable.exists():
+            # Fallback to system manim if not in venv
+            manim_executable = 'manim'
+        
+        cmd = [str(manim_executable)] + quality_flags + [str(script_path)]
+        
+        process = subprocess.run(
+            cmd,
+            cwd=str(manim_dir),
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+        
+        result['output'] = process.stdout
+        
+        if process.returncode == 0:
+            result['success'] = True
+            
+            # Find the generated video file
+            media_dir = manim_dir / "media"
+            if media_dir.exists():
+                # Look for video files
+                video_files = list(media_dir.rglob("*.mp4"))
+                if video_files:
+                    result['video_path'] = str(video_files[0])
+                    logger.info(f"Manim animation saved to: {video_files[0]}")
+                else:
+                    result['error'] = 'No video file generated'
+            else:
+                result['error'] = 'No media directory found'
+        else:
+            result['success'] = False
+            result['error'] = process.stderr
+            
+    except subprocess.TimeoutExpired:
+        result['error'] = 'Manim execution timed out (5 minutes)'
+    except Exception as e:
+        result['error'] = f'Error during Manim execution: {str(e)}'
+        logger.error(f"Manim execution error: {e}")
+    
+    return result
 
 def monkey_patch_pil():
     """Monkey patch PIL to save images to artifacts directory."""
@@ -146,7 +252,9 @@ def monkey_patch_pil():
         
         def patched_show(self, title=None, command=None):
             if ctx.artifacts_dir:
-                image_path = ctx.artifacts_dir / f"image_{uuid.uuid4().hex[:8]}.png"
+                images_dir = ctx.artifacts_dir / "images"
+                images_dir.mkdir(exist_ok=True)
+                image_path = images_dir / f"image_{uuid.uuid4().hex[:8]}.png"
                 self.save(image_path)
                 logger.info(f"Image saved to: {image_path}")
             return original_show(self, title, command)
@@ -534,6 +642,135 @@ def shell_execute(command: str, working_directory: Optional[str] = None, timeout
     return json.dumps(result, indent=2)
 
 @mcp.tool
+def create_manim_animation(manim_code: str, quality: str = 'medium_quality') -> str:
+    """
+    Create a Manim animation from Python code.
+    
+    Args:
+        manim_code: Python code containing Manim scene definitions
+        quality: Animation quality ('low_quality', 'medium_quality', 'high_quality', 'production_quality')
+    
+    Returns:
+        JSON string with execution results, video path, and metadata
+    """
+    result = execute_manim_code(manim_code, quality)
+    return json.dumps(result, indent=2)
+
+@mcp.tool
+def list_manim_animations() -> str:
+    """List all Manim animations in the current artifacts directory."""
+    if not ctx.artifacts_dir or not ctx.artifacts_dir.exists():
+        return "No artifacts directory found. Create an animation first."
+    
+    animations = []
+    for item in ctx.artifacts_dir.iterdir():
+        if item.is_dir() and item.name.startswith('manim_'):
+            animation_info = {
+                'animation_id': item.name.replace('manim_', ''),
+                'path': str(item),
+                'created': item.stat().st_ctime,
+                'size_mb': sum(f.stat().st_size for f in item.rglob('*') if f.is_file()) / 1024 / 1024
+            }
+            
+            # Find video files
+            video_files = list(item.rglob('*.mp4'))
+            if video_files:
+                animation_info['video_file'] = str(video_files[0])
+                animation_info['video_size_mb'] = video_files[0].stat().st_size / 1024 / 1024
+            
+            animations.append(animation_info)
+    
+    if not animations:
+        return "No Manim animations found."
+    
+    return json.dumps({
+        'total_animations': len(animations),
+        'animations': animations
+    }, indent=2)
+
+@mcp.tool
+def cleanup_manim_animation(animation_id: str) -> str:
+    """Clean up a specific Manim animation directory."""
+    if not ctx.artifacts_dir or not ctx.artifacts_dir.exists():
+        return "No artifacts directory found."
+    
+    manim_dir = ctx.artifacts_dir / f"manim_{animation_id}"
+    
+    if not manim_dir.exists():
+        return f"Animation directory not found: {animation_id}"
+    
+    try:
+        shutil.rmtree(manim_dir)
+        return f"Successfully cleaned up animation: {animation_id}"
+    except Exception as e:
+        return f"Failed to clean up animation {animation_id}: {str(e)}"
+
+@mcp.tool
+def get_manim_examples() -> str:
+    """Get example Manim code snippets for common animations."""
+    examples = {
+        'simple_circle': '''
+from manim import *
+
+class SimpleCircle(Scene):
+    def construct(self):
+        circle = Circle()
+        circle.set_fill(PINK, opacity=0.5)
+        self.play(Create(circle))
+        self.wait(1)
+''',
+        'moving_square': '''
+from manim import *
+
+class MovingSquare(Scene):
+    def construct(self):
+        square = Square()
+        square.set_fill(BLUE, opacity=0.5)
+        self.play(Create(square))
+        self.play(square.animate.shift(RIGHT * 2))
+        self.play(square.animate.shift(UP * 2))
+        self.wait(1)
+''',
+        'text_animation': '''
+from manim import *
+
+class TextAnimation(Scene):
+    def construct(self):
+        text = Text("Hello, Manim!")
+        text.set_color(YELLOW)
+        self.play(Write(text))
+        self.play(text.animate.scale(1.5))
+        self.wait(1)
+''',
+        'graph_plot': '''
+from manim import *
+
+class GraphPlot(Scene):
+    def construct(self):
+        axes = Axes(
+            x_range=[-3, 3, 1],
+            y_range=[-3, 3, 1],
+            x_length=6,
+            y_length=6
+        )
+        axes.add_coordinates()
+        
+        graph = axes.plot(lambda x: x**2, color=BLUE)
+        graph_label = axes.get_graph_label(graph, label="f(x) = x^2")
+        
+        self.play(Create(axes))
+        self.play(Create(graph))
+        self.play(Write(graph_label))
+        self.wait(1)
+'''
+    }
+    
+    return json.dumps({
+        'examples': examples,
+        'usage': "Use create_manim_animation() with any of these examples to generate animations."
+    }, indent=2)
+
+@mcp.tool
 def get_execution_info() -> str:
     """Get information about the current execution environment."""
     info = {
@@ -549,7 +786,8 @@ def get_execution_info() -> str:
         'virtual_env': os.environ.get('VIRTUAL_ENV'),
         'path_contains_venv': str(ctx.venv_path / 'bin') in os.environ.get('PATH', ''),
         'current_working_directory': os.getcwd(),
-        'shell_available': True
+        'shell_available': True,
+        'manim_available': shutil.which('manim') is not None
     }
     return json.dumps(info, indent=2)
 

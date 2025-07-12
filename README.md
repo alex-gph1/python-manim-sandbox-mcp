@@ -45,6 +45,12 @@ uv run sandbox-server-stdio
 - **Timeout Control**: Configurable execution timeouts
 - **Working Directory**: Custom execution contexts
 
+### 🎬 **Mathematical Animation (Manim)**
+- **Manim Integration**: Create stunning mathematical animations
+- **Quality Control**: Multiple quality presets (low, medium, high, production)
+- **Video Generation**: Auto-saves MP4 animations to artifacts
+- **Example Library**: Built-in examples for common animations
+
 ### 🔌 **MCP Integration**
 - **Dual Transport**: HTTP and stdio support
 - **LM Studio Ready**: Drop-in integration for AI models
@@ -115,6 +121,10 @@ Add to your LM Studio MCP configuration:
 | `start_repl` | Start interactive session |
 | `start_web_app` | Launch Flask/Streamlit apps |
 | `cleanup_temp_artifacts` | Maintenance operations |
+| `create_manim_animation` | Create mathematical animations using Manim |
+| `list_manim_animations` | List all created Manim animations |
+| `cleanup_manim_animation` | Clean up specific animation files |
+| `get_manim_examples` | Get example Manim code snippets |
 
 ## 💡 Examples
 
@@ -188,6 +198,56 @@ result = shell_execute(
     working_directory="/path/to/search",
     timeout=60
 )
+```
+
+### Manim Animation Creation
+
+```python
+# Simple circle animation
+manim_code = """
+from manim import *
+
+class SimpleCircle(Scene):
+    def construct(self):
+        circle = Circle()
+        circle.set_fill(PINK, opacity=0.5)
+        self.play(Create(circle))
+        self.wait(1)
+"""
+
+result = create_manim_animation(manim_code, quality="medium_quality")
+# Returns JSON with video path and metadata
+
+# Mathematical graph visualization
+math_animation = """
+from manim import *
+
+class GraphPlot(Scene):
+    def construct(self):
+        axes = Axes(
+            x_range=[-3, 3, 1],
+            y_range=[-3, 3, 1],
+            x_length=6,
+            y_length=6
+        )
+        axes.add_coordinates()
+        
+        graph = axes.plot(lambda x: x**2, color=BLUE)
+        graph_label = axes.get_graph_label(graph, label="f(x) = x^2")
+        
+        self.play(Create(axes))
+        self.play(Create(graph))
+        self.play(Write(graph_label))
+        self.wait(1)
+"""
+
+result = create_manim_animation(math_animation, quality="high_quality")
+
+# List all animations
+animations = list_manim_animations()
+
+# Get example code snippets
+examples = get_manim_examples()
 ```
 
 ### Error Handling
@@ -379,6 +439,13 @@ Add to LM Studio MCP settings:
 - Check port availability (8000-8099 range)
 - Verify firewall settings
 
+### Manim Animation Issues
+- Ensure Manim is installed in the virtual environment (`uv pip install manim`)
+- Check that `manim` executable is available in `.venv/bin/`
+- Verify video codec dependencies for MP4 generation
+- Confirm temporary directory has sufficient space for video files
+- Check animation timeout (default 5 minutes) for complex scenes
+
 ## Contributing
 
 1. **Setup Development Environment**:
@@ -398,6 +465,14 @@ Add to LM Studio MCP settings:
 [Apache License](LICENSE)
 
 ## Changelog
+
+### v0.2.0
+- **Manim Integration**: Complete mathematical animation support
+- **4 New MCP Tools**: create_manim_animation, list_manim_animations, cleanup_manim_animation, get_manim_examples
+- **Quality Control**: Multiple animation quality presets
+- **Video Artifacts**: Auto-saves MP4 animations to artifacts directory
+- **Example Library**: Built-in Manim code examples
+- **Virtual Environment Manim**: Uses venv-installed Manim executable
 
 ### v0.1.0
 - Initial enhanced package structure
