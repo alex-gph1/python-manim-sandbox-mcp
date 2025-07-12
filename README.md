@@ -39,6 +39,12 @@ uv run sandbox-server-stdio
 - **Process Management**: Track and manage running servers
 - **URL Generation**: Returns accessible endpoints
 
+### 🐊 **Safe Shell Execution**
+- **Command Security**: Filters dangerous operations (rm -rf, sudo, etc.)
+- **Virtual Environment**: Inherits activated environment settings
+- **Timeout Control**: Configurable execution timeouts
+- **Working Directory**: Custom execution contexts
+
 ### 🔌 **MCP Integration**
 - **Dual Transport**: HTTP and stdio support
 - **LM Studio Ready**: Drop-in integration for AI models
@@ -102,6 +108,7 @@ Add to your LM Studio MCP configuration:
 | Tool | Description |
 |------|-------------|
 | `execute` | Execute Python code with artifact capture |
+| `shell_execute` | Execute shell commands safely with security filtering |
 | `list_artifacts` | List generated artifacts |
 | `cleanup_artifacts` | Clean up temporary files |
 | `get_execution_info` | Get environment diagnostics |
@@ -163,12 +170,36 @@ result = start_web_app(flask_code, "flask")
 # Returns URL where app is accessible
 ```
 
+### Shell Command Execution
+
+```python
+# Install packages via shell
+result = shell_execute("uv pip install matplotlib")
+
+# Check environment
+result = shell_execute("which python")
+
+# List directory contents
+result = shell_execute("ls -la")
+
+# Custom working directory and timeout
+result = shell_execute(
+    "find . -name '*.py' | head -10", 
+    working_directory="/path/to/search",
+    timeout=60
+)
+```
+
 ### Error Handling
 
 ```python
 # Import error with detailed diagnostics
 result = execute(code="import nonexistent_module")
 # Returns structured error with sys.path info
+
+# Security-blocked shell command
+result = shell_execute("rm -rf /")
+# Returns security error with blocked pattern info
 ```
 
 ## 🏗️ Architecture
