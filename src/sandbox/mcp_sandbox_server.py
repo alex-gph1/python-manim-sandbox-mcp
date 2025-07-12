@@ -434,6 +434,106 @@ def cleanup_temp_artifacts(max_age_hours: int = 24) -> str:
     }, indent=2)
 
 @mcp.tool
+def shell_execute(command: str, working_directory: Optional[str] = None, timeout: int = 30) -> str:
+    """
+    Execute a shell command safely in a controlled environment.
+    
+    Args:
+        command: The shell command to execute
+        working_directory: Directory to run the command in (defaults to project root)
+        timeout: Maximum execution time in seconds
+    
+    Returns:
+        JSON string containing execution results, stdout, stderr, and metadata
+    """
+    # Set working directory
+    if working_directory is None:
+        working_directory = str(ctx.project_root)
+    
+    # Security checks for dangerous commands
+    dangerous_patterns = [
+        'rm -rf /', 'rm -rf *', 'mkfs', 'dd if=', 'chmod -R 777', 
+        'chown -R', 'sudo', 'su -', 'passwd', 'userdel', 'useradd',
+        'systemctl', 'service', 'mount', 'umount', 'fdisk', 'parted',
+        'iptables', 'firewall', 'shutdown', 'reboot', 'halt', 'poweroff'
+    ]
+    
+    command_lower = command.lower()
+    for pattern in dangerous_patterns:
+        if pattern in command_lower:
+            return json.dumps({
+                'stdout': '',
+                'stderr': f'Command blocked for security: contains dangerous pattern "{pattern}"',
+                'return_code': -1,
+                'error': {
+                    'type': 'SecurityError',
+                    'message': f'Command blocked: contains dangerous pattern "{pattern}"',
+                    'command': command
+                },
+                'execution_info': {
+                    'working_directory': working_directory,
+                    'timeout': timeout,
+                    'command_blocked': True
+                }
+            }, indent=2)
+    
+    result = {
+        'stdout': '',
+        'stderr': '',
+        'return_code': 0,
+        'error': None,
+        'execution_info': {
+            'working_directory': working_directory,
+            'timeout': timeout,
+            'command': command,
+            'command_blocked': False
+        }
+    }
+    
+    try:
+        # Execute the command with timeout
+        process = subprocess.run(
+            command,
+            shell=True,
+            cwd=working_directory,
+            timeout=timeout,
+            capture_output=True,
+            text=True,
+            env=os.environ.copy()  # Use current environment including VIRTUAL_ENV
+        )
+        
+        result['stdout'] = process.stdout
+        result['stderr'] = process.stderr
+        result['return_code'] = process.returncode
+        
+        if process.returncode != 0:
+            result['error'] = {
+                'type': 'CommandError',
+                'message': f'Command failed with return code {process.returncode}',
+                'return_code': process.returncode
+            }
+            
+    except subprocess.TimeoutExpired:
+        result['error'] = {
+            'type': 'TimeoutError',
+            'message': f'Command timed out after {timeout} seconds',
+            'timeout': timeout
+        }
+        result['stderr'] = f'Command timed out after {timeout} seconds'
+        result['return_code'] = -2
+        
+    except Exception as e:
+        result['error'] = {
+            'type': type(e).__name__,
+            'message': str(e),
+            'traceback': traceback.format_exc()
+        }
+        result['stderr'] = f'Error executing command: {e}'
+        result['return_code'] = -3
+    
+    return json.dumps(result, indent=2)
+
+@mcp.tool
 def get_execution_info() -> str:
     """Get information about the current execution environment."""
     info = {
@@ -447,7 +547,9 @@ def get_execution_info() -> str:
         'web_servers': list(ctx.web_servers.keys()),
         'global_variables': list(ctx.execution_globals.keys()),
         'virtual_env': os.environ.get('VIRTUAL_ENV'),
-        'path_contains_venv': str(ctx.venv_path / 'bin') in os.environ.get('PATH', '')
+        'path_contains_venv': str(ctx.venv_path / 'bin') in os.environ.get('PATH', ''),
+        'current_working_directory': os.getcwd(),
+        'shell_available': True
     }
     return json.dumps(info, indent=2)
 
