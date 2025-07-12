@@ -395,7 +395,7 @@ Add to LM Studio MCP settings:
 
 ## License
 
-[Specify your license here]
+[Apache License](LICENSE)
 
 ## Changelog
 
