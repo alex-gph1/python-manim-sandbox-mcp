@@ -8,6 +8,8 @@ import uuid
 import tempfile
 import shutil
 import subprocess
+from .core.resource_manager import get_resource_manager
+from .core.security import get_security_manager, SecurityLevel
 import threading
 import time
 import socket
@@ -114,6 +116,8 @@ class ExecutionContext:
 
 # Global execution context
 ctx = ExecutionContext()
+resource_manager = get_resource_manager()
+security_manager = get_security_manager(SecurityLevel.MEDIUM)
 
 def monkey_patch_matplotlib():
     """Monkey patch matplotlib to save plots to artifacts directory."""
@@ -178,8 +182,10 @@ def find_free_port(start_port=8000):
 def launch_web_app(code: str, app_type: str) -> Optional[str]:
     """Launch a web application and return the URL."""
     try:
+        resource_manager.check_resource_limits()
         port = find_free_port()
-        
+        resource_manager.process_manager.cleanup_finished()
+    
         if app_type == 'flask':
             # Modify Flask code to run on specific port
             modified_code = code + f"\nif __name__ == '__main__': app.run(host='127.0.0.1', port={port}, debug=False)"
@@ -193,12 +199,19 @@ def launch_web_app(code: str, app_type: str) -> Optional[str]:
             cmd = [sys.executable, '-m', 'streamlit', 'run', str(script_path), '--server.port', str(port), '--server.headless', 'true']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
+            # Register process with resource manager
+            process_id = resource_manager.process_manager.add_process(
+                process, 
+                name=f"streamlit_{port}",
+                metadata={'type': 'streamlit', 'port': port}
+            )
+            
             # Give it time to start
             time.sleep(2)
             
             if process.poll() is None:  # Still running
                 url = f"http://127.0.0.1:{port}"
-                ctx.web_servers[url] = process
+                ctx.web_servers[url] = process_id
                 return url
             else:
                 return None
@@ -210,8 +223,8 @@ def launch_web_app(code: str, app_type: str) -> Optional[str]:
             def run_flask():
                 exec(modified_code, ctx.execution_globals)
             
-            thread = threading.Thread(target=run_flask, daemon=True)
-            thread.start()
+            # Use resource manager for thread management
+            future = resource_manager.thread_pool.submit(run_flask)
             time.sleep(1)  # Give Flask time to start
             
             url = f"http://127.0.0.1:{port}"
@@ -450,32 +463,26 @@ def shell_execute(command: str, working_directory: Optional[str] = None, timeout
     if working_directory is None:
         working_directory = str(ctx.project_root)
     
-    # Security checks for dangerous commands
-    dangerous_patterns = [
-        'rm -rf /', 'rm -rf *', 'mkfs', 'dd if=', 'chmod -R 777', 
-        'chown -R', 'sudo', 'su -', 'passwd', 'userdel', 'useradd',
-        'systemctl', 'service', 'mount', 'umount', 'fdisk', 'parted',
-        'iptables', 'firewall', 'shutdown', 'reboot', 'halt', 'poweroff'
-    ]
-    
-    command_lower = command.lower()
-    for pattern in dangerous_patterns:
-        if pattern in command_lower:
-            return json.dumps({
-                'stdout': '',
-                'stderr': f'Command blocked for security: contains dangerous pattern "{pattern}"',
-                'return_code': -1,
-                'error': {
-                    'type': 'SecurityError',
-                    'message': f'Command blocked: contains dangerous pattern "{pattern}"',
-                    'command': command
-                },
-                'execution_info': {
-                    'working_directory': working_directory,
-                    'timeout': timeout,
-                    'command_blocked': True
-                }
-            }, indent=2)
+    # Enhanced security checks using security manager
+    is_safe, violation = security_manager.check_command_security(command)
+    if not is_safe:
+        return json.dumps({
+            'stdout': '',
+            'stderr': f'Command blocked for security: {violation.message}',
+            'return_code': -1,
+            'error': {
+                'type': 'SecurityError',
+                'message': violation.message,
+                'level': violation.level.value,
+                'command': command
+            },
+            'execution_info': {
+                'working_directory': working_directory,
+                'timeout': timeout,
+                'command_blocked': True,
+                'security_violation': True
+            }
+        }, indent=2)
     
     result = {
         'stdout': '',
@@ -552,6 +559,43 @@ def get_execution_info() -> str:
         'shell_available': True
     }
     return json.dumps(info, indent=2)
+
+@mcp.tool
+def get_resource_stats() -> str:
+    """Get comprehensive resource usage statistics."""
+    stats = resource_manager.get_resource_stats()
+    return json.dumps(stats, indent=2)
+
+@mcp.tool
+def emergency_cleanup() -> str:
+    """Perform emergency cleanup of all resources."""
+    try:
+        # Clean up finished processes
+        finished = resource_manager.process_manager.cleanup_finished()
+        
+        # Clean up web servers
+        for url, process_id in ctx.web_servers.items():
+            resource_manager.process_manager.remove_process(process_id)
+        ctx.web_servers.clear()
+        
+        # Clean up artifacts
+        ctx.cleanup_artifacts()
+        
+        # Force garbage collection
+        import gc
+        gc.collect()
+        
+        return json.dumps({
+            'status': 'success',
+            'message': 'Emergency cleanup completed',
+            'finished_processes': finished,
+            'web_servers_cleaned': len(ctx.web_servers)
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Emergency cleanup failed: {str(e)}'
+        }, indent=2)
 
 def main():
     """Entry point for the HTTP MCP server."""

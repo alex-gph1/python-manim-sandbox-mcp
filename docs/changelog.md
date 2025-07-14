@@ -11,7 +11,17 @@
 - Fluent configuration API with builder pattern
 - Real-time resource usage tracking with metrics
 - Modern Python async support
-- Improved command filtering and security
+- Enhanced resource management with memory monitoring and process lifecycle management
+- Automatic cleanup system for zombie processes and resource leaks
+- Thread pool management with configurable limits
+- Advanced security system with regex-based command filtering
+- Multi-level security enforcement (LOW, MEDIUM, HIGH, CRITICAL)
+- Filesystem access controls and network security
+- Real-time security audit logging and violation tracking
+- Secure workspace creation and management
+- Input validation and sanitization
+- Port allocation and network access controls
+- MCP tools for resource stats and emergency cleanup
 - Comprehensive file artifact handling
 - Safe shell command execution with timeouts
 - Flexible sandbox configuration options

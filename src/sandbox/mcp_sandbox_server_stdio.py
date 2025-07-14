@@ -8,6 +8,8 @@ import uuid
 import tempfile
 import shutil
 import subprocess
+from .core.resource_manager import get_resource_manager
+from .core.security import get_security_manager, SecurityLevel
 import threading
 import time
 import socket
@@ -44,10 +46,18 @@ class ExecutionContext:
         else:
             # Development: assume file is in project root
             self.project_root = current_file.parent
+        
+        # Set up sandbox working area one level above project root
+        self.sandbox_area = self.project_root.parent / "sandbox_area"
+        self.sandbox_area.mkdir(exist_ok=True)
+        
         self.venv_path = self.project_root / ".venv"
         self.artifacts_dir = None
         self.web_servers = {}  # Track running web servers
         self.execution_globals = {}  # Persistent globals across executions
+        self.compilation_cache = {}  # Cache for compiled code
+        self.cache_hits = 0
+        self.cache_misses = 0
         self._setup_environment()
     
     def _setup_environment(self):
@@ -139,6 +149,8 @@ class ExecutionContext:
 
 # Global execution context
 ctx = ExecutionContext()
+resource_manager = get_resource_manager()
+security_manager = get_security_manager(SecurityLevel.MEDIUM)
 
 def monkey_patch_matplotlib():
     """Monkey patch matplotlib to save plots to artifacts directory."""
@@ -286,8 +298,10 @@ def find_free_port(start_port=8000):
 def launch_web_app(code: str, app_type: str) -> Optional[str]:
     """Launch a web application and return the URL."""
     try:
+        resource_manager.check_resource_limits()
         port = find_free_port()
-        
+        resource_manager.process_manager.cleanup_finished()
+    
         if app_type == 'flask':
             # Modify Flask code to run on specific port
             modified_code = code + f"\nif __name__ == '__main__': app.run(host='127.0.0.1', port={port}, debug=False)"
@@ -301,12 +315,19 @@ def launch_web_app(code: str, app_type: str) -> Optional[str]:
             cmd = [sys.executable, '-m', 'streamlit', 'run', str(script_path), '--server.port', str(port), '--server.headless', 'true']
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             
+            # Register process with resource manager
+            process_id = resource_manager.process_manager.add_process(
+                process, 
+                name=f"streamlit_{port}",
+                metadata={'type': 'streamlit', 'port': port}
+            )
+            
             # Give it time to start
             time.sleep(2)
             
             if process.poll() is None:  # Still running
                 url = f"http://127.0.0.1:{port}"
-                ctx.web_servers[url] = process
+                ctx.web_servers[url] = process_id
                 return url
             else:
                 return None
@@ -318,8 +339,8 @@ def launch_web_app(code: str, app_type: str) -> Optional[str]:
             def run_flask():
                 exec(modified_code, ctx.execution_globals)
             
-            thread = threading.Thread(target=run_flask, daemon=True)
-            thread.start()
+            # Use resource manager for thread management
+            future = resource_manager.thread_pool.submit(run_flask)
             time.sleep(1)  # Give Flask time to start
             
             url = f"http://127.0.0.1:{port}"
@@ -475,6 +496,20 @@ def list_artifacts() -> str:
     return result
 
 @mcp.tool
+def clear_cache(important_only: bool = False) -> str:
+    """Clear the compilation cache, optionally preserving important commands."""
+    if important_only:
+        # Logic to preserve important commands goes here
+        preserved_commands = ["import", "def", "class"]
+        ctx.compilation_cache = {k: v for k, v in ctx.compilation_cache.items() if any(cmd in k for cmd in preserved_commands)}
+    else:
+        ctx.compilation_cache.clear()
+    
+    ctx.cache_hits = 0
+    ctx.cache_misses = 0
+    return "Cache cleared successfully."
+
+@mcp.tool
 def cleanup_artifacts() -> str:
     """Clean up all artifacts and temporary files."""
     ctx.cleanup_artifacts()
@@ -548,42 +583,38 @@ def shell_execute(command: str, working_directory: Optional[str] = None, timeout
     
     Args:
         command: The shell command to execute
-        working_directory: Directory to run the command in (defaults to project root)
+        working_directory: Directory to run the command in (defaults to sandbox_area)
         timeout: Maximum execution time in seconds
     
     Returns:
         JSON string containing execution results, stdout, stderr, and metadata
+    
+    CAUTION: Commands execute in isolated sandbox_area. Avoid system modifications.
     """
-    # Set working directory
+    # Set working directory - default to sandbox_area for safety
     if working_directory is None:
-        working_directory = str(ctx.project_root)
+        working_directory = str(ctx.sandbox_area)
     
-    # Security checks for dangerous commands
-    dangerous_patterns = [
-        'rm -rf /', 'rm -rf *', 'mkfs', 'dd if=', 'chmod -R 777', 
-        'chown -R', 'sudo', 'su -', 'passwd', 'userdel', 'useradd',
-        'systemctl', 'service', 'mount', 'umount', 'fdisk', 'parted',
-        'iptables', 'firewall', 'shutdown', 'reboot', 'halt', 'poweroff'
-    ]
-    
-    command_lower = command.lower()
-    for pattern in dangerous_patterns:
-        if pattern in command_lower:
-            return json.dumps({
-                'stdout': '',
-                'stderr': f'Command blocked for security: contains dangerous pattern "{pattern}"',
-                'return_code': -1,
-                'error': {
-                    'type': 'SecurityError',
-                    'message': f'Command blocked: contains dangerous pattern "{pattern}"',
-                    'command': command
-                },
-                'execution_info': {
-                    'working_directory': working_directory,
-                    'timeout': timeout,
-                    'command_blocked': True
-                }
-            }, indent=2)
+    # Enhanced security checks using security manager
+    is_safe, violation = security_manager.check_command_security(command)
+    if not is_safe:
+        return json.dumps({
+            'stdout': '',
+            'stderr': f'Command blocked for security: {violation.message}',
+            'return_code': -1,
+            'error': {
+                'type': 'SecurityError',
+                'message': violation.message,
+                'level': violation.level.value,
+                'command': command
+            },
+            'execution_info': {
+                'working_directory': working_directory,
+                'timeout': timeout,
+                'command_blocked': True,
+                'security_violation': True
+            }
+        }, indent=2)
     
     result = {
         'stdout': '',
