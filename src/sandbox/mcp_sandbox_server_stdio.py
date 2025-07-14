@@ -134,11 +134,16 @@ class ExecutionContext:
         self.artifacts_dir = artifacts_root / session_dir
         self.artifacts_dir.mkdir(exist_ok=True)
         
-        # Create subdirectories for different artifact types
+        # Create subdirectories for different artifact types (expanded categories)
         (self.artifacts_dir / "plots").mkdir(exist_ok=True)
         (self.artifacts_dir / "images").mkdir(exist_ok=True)
         (self.artifacts_dir / "animations").mkdir(exist_ok=True)
         (self.artifacts_dir / "files").mkdir(exist_ok=True)
+        (self.artifacts_dir / "audio").mkdir(exist_ok=True)
+        (self.artifacts_dir / "data").mkdir(exist_ok=True)
+        (self.artifacts_dir / "models").mkdir(exist_ok=True)
+        (self.artifacts_dir / "documents").mkdir(exist_ok=True)
+        (self.artifacts_dir / "web_assets").mkdir(exist_ok=True)
         
         return str(self.artifacts_dir)
     
@@ -218,12 +223,25 @@ class ExecutionContext:
         return backups
     
     def rollback_artifacts(self, backup_name: str) -> str:
-        """Rollback to a previous artifact version."""
+        """Rollback to a previous artifact version with improved validation."""
         backup_root = self.project_root / "artifact_backups"
+        
+        # Enhanced validation
+        if not backup_root.exists():
+            return f"No backups directory found. Available backups: none"
+        
         backup_path = backup_root / backup_name
         
         if not backup_path.exists():
-            return f"Backup '{backup_name}' not found"
+            # Provide helpful feedback about available backups
+            available_backups = [d.name for d in backup_root.iterdir() if d.is_dir()]
+            if available_backups:
+                return f"Backup '{backup_name}' not found. Available backups: {', '.join(available_backups[:5])}{'...' if len(available_backups) > 5 else ''}"
+            else:
+                return f"Backup '{backup_name}' not found. No backups available."
+        
+        if not self.artifacts_dir:
+            return "No current artifacts directory. Please create artifacts first."
         
         # Create backup of current artifacts before rollback
         current_backup = self.backup_artifacts("pre_rollback")
@@ -1431,12 +1449,42 @@ def start_enhanced_repl() -> str:
         try:
             import IPython
             ipython_available = True
+            ipython_version = IPython.__version__
         except ImportError:
             ipython_available = False
+            ipython_version = None
+        
+        # Check other commonly used packages
+        packages_status = {}
+        common_packages = [
+            'numpy', 'pandas', 'matplotlib', 'scipy', 'sklearn', 'sympy', 
+            'requests', 'beautifulsoup4', 'jupyter', 'notebook', 'plotly',
+            'seaborn', 'opencv-python', 'pillow', 'tensorflow', 'torch',
+            'flask', 'streamlit', 'fastapi', 'django', 'manim'
+        ]
+        
+        for package in common_packages:
+            try:
+                __import__(package.replace('-', '_'))
+                packages_status[package] = 'available'
+            except ImportError:
+                packages_status[package] = 'not_installed'
+        
+        # Check network connectivity (basic test)
+        network_available = False
+        try:
+            # Test connectivity to Google DNS
+            import socket
+            socket.create_connection(('8.8.8.8', 53), timeout=3)
+            network_available = True
+        except (socket.error, OSError):
+            network_available = False
         
         repl_info = {
             'status': 'repl_started',
             'ipython_available': ipython_available,
+            'ipython_version': ipython_version,
+            'network_available': network_available,
             'features': {
                 'tab_completion': ipython_available,
                 'history': ipython_available,
@@ -1444,7 +1492,9 @@ def start_enhanced_repl() -> str:
                 'syntax_highlighting': ipython_available,
                 'artifact_management': True,
                 'manim_support': True,
-                'virtual_env': ctx.venv_path.exists()
+                'virtual_env': ctx.venv_path.exists(),
+                'package_installation': ctx.venv_path.exists(),
+                'network_access': network_available
             },
             'available_magic_commands': [
                 '%artifacts - List and manage artifacts',
@@ -1452,12 +1502,23 @@ def start_enhanced_repl() -> str:
                 '%save_session - Save current session variables',
                 '%load_session - Load saved session',
                 '%clear_cache - Clear compilation cache',
-                '%env_info - Show environment information'
+                '%env_info - Show environment information',
+                '%install - Install packages (if network available)',
+                '%packages - List installed packages'
             ],
+            'package_status': packages_status,
+            'missing_packages': [pkg for pkg, status in packages_status.items() if status == 'not_installed'],
+            'installed_packages': [pkg for pkg, status in packages_status.items() if status == 'available'],
             'globals_available': list(ctx.execution_globals.keys()),
             'artifacts_dir': str(ctx.artifacts_dir) if ctx.artifacts_dir else None,
             'virtual_env': os.environ.get('VIRTUAL_ENV'),
-            'message': 'Enhanced REPL session started with artifact management and Manim support'
+            'sandbox_limitations': {
+                'network_access': network_available,
+                'file_system_access': 'sandboxed',
+                'external_commands': 'limited',
+                'package_installation': 'virtual_env_only'
+            },
+            'message': f'Enhanced REPL session started. IPython: {"available" if ipython_available else "not available"}, Network: {"available" if network_available else "blocked"}, Packages: {len([p for p in packages_status.values() if p == "available"])}/{len(packages_status)} available'
         }
         
         return json.dumps(repl_info, indent=2)
@@ -1997,6 +2058,351 @@ def cleanup_web_app_export(export_name: str) -> str:
             'status': 'error',
             'message': f'Failed to cleanup export: {str(e)}'
         }, indent=2)
+
+@mcp.tool
+def install_package(package_name: str, version: str = None) -> str:
+    """Install a Python package in the virtual environment.
+    
+    Args:
+        package_name: Name of the package to install
+        version: Optional version specification
+    
+    Returns:
+        JSON string with installation results
+    """
+    if not ctx.venv_path.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': 'Virtual environment not found. Cannot install packages.'
+        }, indent=2)
+    
+    # Check network connectivity first
+    try:
+        import socket
+        socket.create_connection(('pypi.org', 443), timeout=5)
+    except (socket.error, OSError):
+        return json.dumps({
+            'status': 'error',
+            'message': 'Network access blocked. Cannot install packages from PyPI.'
+        }, indent=2)
+    
+    # Construct package specification
+    if version:
+        package_spec = f"{package_name}=={version}"
+    else:
+        package_spec = package_name
+    
+    # Use pip from virtual environment
+    pip_executable = ctx.venv_path / 'bin' / 'pip'
+    if not pip_executable.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': 'pip not found in virtual environment'
+        }, indent=2)
+    
+    try:
+        # Install package
+        install_result = subprocess.run(
+            [str(pip_executable), 'install', package_spec],
+            capture_output=True,
+            text=True,
+            timeout=300  # 5 minute timeout
+        )
+        
+        if install_result.returncode == 0:
+            return json.dumps({
+                'status': 'success',
+                'package': package_name,
+                'version': version,
+                'install_output': install_result.stdout,
+                'message': f'Successfully installed {package_spec}'
+            }, indent=2)
+        else:
+            return json.dumps({
+                'status': 'error',
+                'package': package_name,
+                'install_output': install_result.stdout,
+                'install_error': install_result.stderr,
+                'message': f'Failed to install {package_spec}'
+            }, indent=2)
+            
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Installation of {package_spec} timed out'
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to install {package_spec}: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def list_installed_packages() -> str:
+    """List all installed packages in the virtual environment.
+    
+    Returns:
+        JSON string with package listing
+    """
+    if not ctx.venv_path.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': 'Virtual environment not found'
+        }, indent=2)
+    
+    pip_executable = ctx.venv_path / 'bin' / 'pip'
+    if not pip_executable.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': 'pip not found in virtual environment'
+        }, indent=2)
+    
+    try:
+        # List installed packages
+        list_result = subprocess.run(
+            [str(pip_executable), 'list', '--format=json'],
+            capture_output=True,
+            text=True,
+            timeout=30
+        )
+        
+        if list_result.returncode == 0:
+            try:
+                packages = json.loads(list_result.stdout)
+                return json.dumps({
+                    'status': 'success',
+                    'total_packages': len(packages),
+                    'packages': packages,
+                    'message': f'Found {len(packages)} installed packages'
+                }, indent=2)
+            except json.JSONDecodeError:
+                return json.dumps({
+                    'status': 'error',
+                    'message': 'Failed to parse package list',
+                    'raw_output': list_result.stdout
+                }, indent=2)
+        else:
+            return json.dumps({
+                'status': 'error',
+                'message': 'Failed to list packages',
+                'error': list_result.stderr
+            }, indent=2)
+            
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            'status': 'error',
+            'message': 'Package listing timed out'
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to list packages: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def get_sandbox_limitations() -> str:
+    """Get detailed information about sandbox limitations and restrictions.
+    
+    Returns:
+        JSON string with limitation details
+    """
+    # Check network connectivity
+    network_tests = {
+        'dns_resolution': False,
+        'http_access': False,
+        'pypi_access': False
+    }
+    
+    try:
+        import socket
+        socket.create_connection(('8.8.8.8', 53), timeout=3)
+        network_tests['dns_resolution'] = True
+        
+        socket.create_connection(('httpbin.org', 80), timeout=3)
+        network_tests['http_access'] = True
+        
+        socket.create_connection(('pypi.org', 443), timeout=3)
+        network_tests['pypi_access'] = True
+    except (socket.error, OSError):
+        pass
+    
+    # Check available commands
+    restricted_commands = [
+        'rm', 'rmdir', 'sudo', 'su', 'chmod', 'chown', 'mount', 'umount',
+        'systemctl', 'service', 'reboot', 'shutdown', 'fdisk', 'mkfs',
+        'ping', 'curl', 'wget', 'ssh', 'scp', 'rsync'
+    ]
+    
+    command_availability = {}
+    for cmd in restricted_commands:
+        command_availability[cmd] = shutil.which(cmd) is not None
+    
+    limitations = {
+        'network_access': {
+            'dns_resolution': network_tests['dns_resolution'],
+            'http_access': network_tests['http_access'],
+            'pypi_access': network_tests['pypi_access'],
+            'description': 'Network access may be restricted by firewall or security policies'
+        },
+        'file_system_access': {
+            'sandboxed_area': str(ctx.sandbox_area),
+            'artifacts_dir': str(ctx.artifacts_dir) if ctx.artifacts_dir else None,
+            'home_directory_access': os.path.expanduser('~') != '/root',
+            'description': 'File system access is limited to sandbox area and artifacts directory'
+        },
+        'package_installation': {
+            'virtual_env_available': ctx.venv_path.exists(),
+            'pip_available': (ctx.venv_path / 'bin' / 'pip').exists() if ctx.venv_path.exists() else False,
+            'network_required': True,
+            'description': 'Package installation requires network access and virtual environment'
+        },
+        'system_commands': {
+            'restricted_commands': {cmd: {'available': available, 'blocked': available} 
+                                    for cmd, available in command_availability.items()},
+            'description': 'Many system administration commands are restricted or blocked'
+        },
+        'repl_functionality': {
+            'ipython_available': False,
+            'tab_completion': False,
+            'magic_commands': False,
+            'description': 'Enhanced REPL features require IPython installation'
+        }
+    }
+    
+    # Check IPython availability
+    try:
+        import IPython
+        limitations['repl_functionality']['ipython_available'] = True
+        limitations['repl_functionality']['tab_completion'] = True
+        limitations['repl_functionality']['magic_commands'] = True
+    except ImportError:
+        pass
+    
+    return json.dumps({
+        'status': 'success',
+        'limitations': limitations,
+        'recommendations': [
+            'Install IPython for enhanced REPL functionality: install_package("ipython")',
+            'Install common data science packages: install_package("numpy"), install_package("pandas")',
+            'Use artifact management tools for persistent storage',
+            'Export web applications for external deployment',
+            'Use shell_execute() for safe command execution in sandbox area'
+        ],
+        'message': 'Sandbox limitations and recommendations provided'
+    }, indent=2)
+
+@mcp.tool
+def get_comprehensive_help() -> str:
+    """Get comprehensive help and usage examples for the sandbox environment.
+    
+    Returns:
+        JSON string with help information
+    """
+    help_info = {
+        'getting_started': {
+            'basic_execution': {
+                'description': 'Execute Python code with artifact management',
+                'examples': [
+                    'execute("import numpy as np; print(np.array([1, 2, 3]))")',
+                    'execute("import matplotlib.pyplot as plt; plt.plot([1, 2, 3]); plt.show()")',
+                    'execute("print(\'Hello, Sandbox!\')", interactive=True)'
+                ]
+            },
+            'artifact_management': {
+                'description': 'Create, manage, and backup artifacts',
+                'examples': [
+                    'list_artifacts()',
+                    'backup_current_artifacts("my_backup")',
+                    'list_artifact_backups()',
+                    'rollback_to_backup("backup_20240101_120000")',
+                    'cleanup_artifacts_by_type("plots")'
+                ]
+            },
+            'web_applications': {
+                'description': 'Create and export web applications',
+                'examples': [
+                    'start_web_app("from flask import Flask; app = Flask(__name__); @app.route(\'/\') def hello(): return \'Hello!\'", "flask")',
+                    'export_web_app("import streamlit as st; st.title(\'My App\'); st.write(\'Hello!\')", "streamlit", "my_app")',
+                    'list_web_app_exports()',
+                    'build_docker_image("my_app")'
+                ]
+            }
+        },
+        'advanced_features': {
+            'manim_animations': {
+                'description': 'Create mathematical animations with Manim',
+                'examples': [
+                    'get_manim_examples()',
+                    'create_manim_animation("from manim import *; class MyScene(Scene): def construct(self): circle = Circle(); self.play(Create(circle))", "medium_quality")',
+                    'list_manim_animations()'
+                ]
+            },
+            'package_management': {
+                'description': 'Install and manage Python packages',
+                'examples': [
+                    'install_package("numpy")',
+                    'install_package("pandas", "1.5.0")',
+                    'list_installed_packages()'
+                ]
+            },
+            'shell_commands': {
+                'description': 'Execute shell commands safely',
+                'examples': [
+                    'shell_execute("ls -la")',
+                    'shell_execute("python --version")',
+                    'shell_execute("find . -name \"*.py\"")',
+                    'shell_execute("git status", "/path/to/repo")'
+                ]
+            }
+        },
+        'troubleshooting': {
+            'common_issues': {
+                'import_errors': {
+                    'description': 'Module not found errors',
+                    'solutions': [
+                        'Check if package is installed: list_installed_packages()',
+                        'Install missing package: install_package("package_name")',
+                        'Check virtual environment: get_execution_info()'
+                    ]
+                },
+                'network_issues': {
+                    'description': 'Network access blocked',
+                    'solutions': [
+                        'Check limitations: get_sandbox_limitations()',
+                        'Use offline packages when possible',
+                        'Export applications for external deployment'
+                    ]
+                },
+                'artifact_issues': {
+                    'description': 'Artifacts not appearing or disappearing',
+                    'solutions': [
+                        'Check artifacts directory: get_execution_info()',
+                        'List current artifacts: list_artifacts()',
+                        'Create backup before cleanup: backup_current_artifacts()'
+                    ]
+                }
+            }
+        },
+        'best_practices': [
+            'Always backup important artifacts before cleanup',
+            'Use descriptive names for backups and exports',
+            'Check sandbox limitations before attempting network operations',
+            'Use virtual environment for package installations',
+            'Export web applications for persistence beyond sandbox session',
+            'Use shell_execute() instead of os.system() for safety'
+        ],
+        'tool_categories': {
+            'execution': ['execute', 'execute_with_artifacts', 'start_enhanced_repl'],
+            'artifacts': ['list_artifacts', 'backup_current_artifacts', 'list_artifact_backups', 'rollback_to_backup', 'cleanup_artifacts_by_type'],
+            'web_apps': ['start_web_app', 'export_web_app', 'list_web_app_exports', 'build_docker_image'],
+            'manim': ['create_manim_animation', 'list_manim_animations', 'get_manim_examples'],
+            'packages': ['install_package', 'list_installed_packages'],
+            'system': ['shell_execute', 'get_execution_info', 'get_sandbox_limitations'],
+            'help': ['get_comprehensive_help']
+        }
+    }
+    
+    return json.dumps(help_info, indent=2)
 
 def main():
     """Entry point for the stdio MCP server."""
