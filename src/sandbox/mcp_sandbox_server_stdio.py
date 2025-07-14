@@ -146,6 +146,138 @@ class ExecutionContext:
         """Clean up artifacts directory."""
         if self.artifacts_dir and self.artifacts_dir.exists():
             shutil.rmtree(self.artifacts_dir, ignore_errors=True)
+    
+    def backup_artifacts(self, backup_name: str = None) -> str:
+        """Create a versioned backup of current artifacts."""
+        if not self.artifacts_dir or not self.artifacts_dir.exists():
+            return "No artifacts directory to backup"
+        
+        # Create backup directory structure
+        backup_root = self.project_root / "artifact_backups"
+        backup_root.mkdir(exist_ok=True)
+        
+        # Generate backup name with timestamp
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        if backup_name:
+            backup_name = f"{backup_name}_{timestamp}"
+        else:
+            backup_name = f"backup_{timestamp}"
+        
+        backup_path = backup_root / backup_name
+        
+        # Copy artifacts to backup
+        shutil.copytree(self.artifacts_dir, backup_path)
+        
+        # Cleanup old backups to manage storage
+        self._cleanup_old_backups(backup_root)
+        
+        return str(backup_path)
+    
+    def _cleanup_old_backups(self, backup_root: Path, max_backups: int = 10):
+        """Clean up old backup directories to prevent storage overflow."""
+        try:
+            # Get all backup directories sorted by modification time
+            backups = [d for d in backup_root.iterdir() if d.is_dir()]
+            backups.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            
+            # Remove old backups beyond the limit
+            for backup in backups[max_backups:]:
+                shutil.rmtree(backup, ignore_errors=True)
+                logger.info(f"Removed old backup: {backup}")
+                
+        except Exception as e:
+            logger.warning(f"Failed to cleanup old backups: {e}")
+    
+    def list_artifact_backups(self) -> List[Dict[str, Any]]:
+        """List all available artifact backups."""
+        backup_root = self.project_root / "artifact_backups"
+        if not backup_root.exists():
+            return []
+        
+        backups = []
+        for backup_dir in backup_root.iterdir():
+            if backup_dir.is_dir():
+                try:
+                    stat = backup_dir.stat()
+                    size = sum(f.stat().st_size for f in backup_dir.rglob('*') if f.is_file())
+                    backups.append({
+                        'name': backup_dir.name,
+                        'path': str(backup_dir),
+                        'created': stat.st_ctime,
+                        'modified': stat.st_mtime,
+                        'size_bytes': size,
+                        'size_mb': size / (1024 * 1024),
+                        'file_count': len(list(backup_dir.rglob('*')))
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to stat backup {backup_dir}: {e}")
+        
+        # Sort by creation time (newest first)
+        backups.sort(key=lambda x: x['created'], reverse=True)
+        return backups
+    
+    def rollback_artifacts(self, backup_name: str) -> str:
+        """Rollback to a previous artifact version."""
+        backup_root = self.project_root / "artifact_backups"
+        backup_path = backup_root / backup_name
+        
+        if not backup_path.exists():
+            return f"Backup '{backup_name}' not found"
+        
+        # Create backup of current artifacts before rollback
+        current_backup = self.backup_artifacts("pre_rollback")
+        
+        try:
+            # Remove current artifacts
+            if self.artifacts_dir and self.artifacts_dir.exists():
+                shutil.rmtree(self.artifacts_dir)
+            
+            # Copy backup to current artifacts location
+            shutil.copytree(backup_path, self.artifacts_dir)
+            
+            return f"Successfully rolled back to backup '{backup_name}'. Previous state saved as '{Path(current_backup).name}'"
+            
+        except Exception as e:
+            return f"Failed to rollback: {str(e)}"
+    
+    def get_backup_info(self, backup_name: str) -> Dict[str, Any]:
+        """Get detailed information about a specific backup."""
+        backup_root = self.project_root / "artifact_backups"
+        backup_path = backup_root / backup_name
+        
+        if not backup_path.exists():
+            return {'error': f"Backup '{backup_name}' not found"}
+        
+        try:
+            stat = backup_path.stat()
+            files = list(backup_path.rglob('*'))
+            
+            # Categorize files
+            categories = {}
+            for file_path in files:
+                if file_path.is_file():
+                    category = file_path.parent.name
+                    if category not in categories:
+                        categories[category] = []
+                    categories[category].append({
+                        'name': file_path.name,
+                        'size': file_path.stat().st_size,
+                        'extension': file_path.suffix
+                    })
+            
+            return {
+                'name': backup_name,
+                'path': str(backup_path),
+                'created': stat.st_ctime,
+                'modified': stat.st_mtime,
+                'total_files': len([f for f in files if f.is_file()]),
+                'total_size_bytes': sum(f.stat().st_size for f in files if f.is_file()),
+                'categories': categories
+            }
+            
+        except Exception as e:
+            return {'error': f"Failed to get backup info: {str(e)}"}
 
 # Global execution context
 ctx = ExecutionContext()
@@ -394,25 +526,284 @@ def launch_web_app(code: str, app_type: str) -> Optional[str]:
         logger.error(f"Failed to launch web app: {e}")
         return None
 
+def export_flask_app(code: str, export_name: str = None) -> Dict[str, Any]:
+    """Export Flask application as static files and Docker container."""
+    if not ctx.artifacts_dir:
+        ctx.create_artifacts_dir()
+    
+    export_id = str(uuid.uuid4())[:8]
+    export_name = export_name or f"flask_app_{export_id}"
+    export_dir = ctx.artifacts_dir / "exports" / export_name
+    export_dir.mkdir(parents=True, exist_ok=True)
+    
+    result = {
+        'success': False,
+        'export_name': export_name,
+        'export_dir': str(export_dir),
+        'files_created': [],
+        'docker_image': None,
+        'static_site': None,
+        'error': None
+    }
+    
+    try:
+        # Create Flask app file
+        app_file = export_dir / "app.py"
+        with open(app_file, 'w') as f:
+            f.write(code)
+        result['files_created'].append(str(app_file))
+        
+        # Create requirements.txt
+        requirements_file = export_dir / "requirements.txt"
+        with open(requirements_file, 'w') as f:
+            f.write("Flask>=2.0.0\n")
+            f.write("gunicorn>=20.0.0\n")
+        result['files_created'].append(str(requirements_file))
+        
+        # Create Dockerfile
+        dockerfile = export_dir / "Dockerfile"
+        dockerfile_content = '''FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8000
+
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "app:app"]
+'''
+        with open(dockerfile, 'w') as f:
+            f.write(dockerfile_content)
+        result['files_created'].append(str(dockerfile))
+        
+        # Create docker-compose.yml
+        compose_file = export_dir / "docker-compose.yml"
+        compose_content = f'''version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - FLASK_ENV=production
+'''
+        with open(compose_file, 'w') as f:
+            f.write(compose_content)
+        result['files_created'].append(str(compose_file))
+        
+        # Create README.md with instructions
+        readme_file = export_dir / "README.md"
+        readme_content = f'''# {export_name}
+
+Exported Flask application from sandbox.
+
+## Running with Docker
+
+```bash
+docker-compose up --build
+```
+
+The application will be available at http://localhost:8000
+
+## Running locally
+
+```bash
+pip install -r requirements.txt
+python app.py
+```
+
+## Files
+
+- `app.py` - Main Flask application
+- `requirements.txt` - Python dependencies
+- `Dockerfile` - Docker configuration
+- `docker-compose.yml` - Docker Compose configuration
+'''
+        with open(readme_file, 'w') as f:
+            f.write(readme_content)
+        result['files_created'].append(str(readme_file))
+        
+        # Try to build Docker image if Docker is available
+        try:
+            docker_build_result = subprocess.run(
+                ['docker', 'build', '-t', f'sandbox-{export_name}', str(export_dir)],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if docker_build_result.returncode == 0:
+                result['docker_image'] = f'sandbox-{export_name}'
+                logger.info(f"Docker image built successfully: sandbox-{export_name}")
+            else:
+                logger.warning(f"Docker build failed: {docker_build_result.stderr}")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.info("Docker not available or build timed out")
+        
+        result['success'] = True
+        result['export_dir'] = str(export_dir)
+        
+    except Exception as e:
+        result['error'] = str(e)
+        logger.error(f"Failed to export Flask app: {e}")
+    
+    return result
+
+def export_streamlit_app(code: str, export_name: str = None) -> Dict[str, Any]:
+    """Export Streamlit application as Docker container."""
+    if not ctx.artifacts_dir:
+        ctx.create_artifacts_dir()
+    
+    export_id = str(uuid.uuid4())[:8]
+    export_name = export_name or f"streamlit_app_{export_id}"
+    export_dir = ctx.artifacts_dir / "exports" / export_name
+    export_dir.mkdir(parents=True, exist_ok=True)
+    
+    result = {
+        'success': False,
+        'export_name': export_name,
+        'export_dir': str(export_dir),
+        'files_created': [],
+        'docker_image': None,
+        'error': None
+    }
+    
+    try:
+        # Create Streamlit app file
+        app_file = export_dir / "app.py"
+        with open(app_file, 'w') as f:
+            f.write(code)
+        result['files_created'].append(str(app_file))
+        
+        # Create requirements.txt
+        requirements_file = export_dir / "requirements.txt"
+        with open(requirements_file, 'w') as f:
+            f.write("streamlit>=1.28.0\n")
+            f.write("pandas>=1.5.0\n")
+            f.write("numpy>=1.24.0\n")
+        result['files_created'].append(str(requirements_file))
+        
+        # Create Dockerfile
+        dockerfile = export_dir / "Dockerfile"
+        dockerfile_content = '''FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+COPY app.py .
+
+EXPOSE 8501
+
+CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.address=0.0.0.0"]
+'''
+        with open(dockerfile, 'w') as f:
+            f.write(dockerfile_content)
+        result['files_created'].append(str(dockerfile))
+        
+        # Create docker-compose.yml
+        compose_file = export_dir / "docker-compose.yml"
+        compose_content = f'''version: '3.8'
+services:
+  web:
+    build: .
+    ports:
+      - "8501:8501"
+    environment:
+      - STREAMLIT_SERVER_PORT=8501
+      - STREAMLIT_SERVER_ADDRESS=0.0.0.0
+'''
+        with open(compose_file, 'w') as f:
+            f.write(compose_content)
+        result['files_created'].append(str(compose_file))
+        
+        # Create README.md with instructions
+        readme_file = export_dir / "README.md"
+        readme_content = f'''# {export_name}
+
+Exported Streamlit application from sandbox.
+
+## Running with Docker
+
+```bash
+docker-compose up --build
+```
+
+The application will be available at http://localhost:8501
+
+## Running locally
+
+```bash
+pip install -r requirements.txt
+streamlit run app.py
+```
+
+## Files
+
+- `app.py` - Main Streamlit application
+- `requirements.txt` - Python dependencies
+- `Dockerfile` - Docker configuration
+- `docker-compose.yml` - Docker Compose configuration
+'''
+        with open(readme_file, 'w') as f:
+            f.write(readme_content)
+        result['files_created'].append(str(readme_file))
+        
+        # Try to build Docker image if Docker is available
+        try:
+            docker_build_result = subprocess.run(
+                ['docker', 'build', '-t', f'sandbox-{export_name}', str(export_dir)],
+                capture_output=True,
+                text=True,
+                timeout=300
+            )
+            
+            if docker_build_result.returncode == 0:
+                result['docker_image'] = f'sandbox-{export_name}'
+                logger.info(f"Docker image built successfully: sandbox-{export_name}")
+            else:
+                logger.warning(f"Docker build failed: {docker_build_result.stderr}")
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            logger.info("Docker not available or build timed out")
+        
+        result['success'] = True
+        result['export_dir'] = str(export_dir)
+        
+    except Exception as e:
+        result['error'] = str(e)
+        logger.error(f"Failed to export Streamlit app: {e}")
+    
+    return result
+
 def collect_artifacts() -> List[Dict[str, Any]]:
-    """Collect all artifacts from the artifacts directory."""
+    """Collect all artifacts from the artifacts directory (recursive)."""
     artifacts = []
     if not ctx.artifacts_dir or not ctx.artifacts_dir.exists():
         return artifacts
     
-    for file_path in ctx.artifacts_dir.iterdir():
+    # Use rglob to search recursively through all subdirectories
+    for file_path in ctx.artifacts_dir.rglob('*'):
         if file_path.is_file():
             try:
                 # Read file as base64 for embedding
                 with open(file_path, 'rb') as f:
                     content = base64.b64encode(f.read()).decode('utf-8')
                 
+                # Calculate relative path from artifacts_dir for better organization
+                relative_path = file_path.relative_to(ctx.artifacts_dir)
+                
                 artifacts.append({
                     'name': file_path.name,
                     'path': str(file_path),
+                    'relative_path': str(relative_path),
                     'type': file_path.suffix.lower(),
                     'content_base64': content,
-                    'size': file_path.stat().st_size
+                    'size': file_path.stat().st_size,
+                    'category': file_path.parent.name  # e.g., 'plots', 'images', etc.
                 })
             except Exception as e:
                 logger.error(f"Error reading artifact {file_path}: {e}")
@@ -479,6 +870,50 @@ def execute(code: str, interactive: bool = False, web_app_type: Optional[str] = 
                 result['stderr'] = f"Failed to launch {web_app_type} application"
         else:
             # Regular code execution
+            logger.debug(f"Executing code: {repr(code)}")
+            logger.debug(f"Code length: {len(code)}")
+            logger.debug(f"Code lines: {code.count(chr(10)) + 1}")
+            
+            # Check for common issues that might indicate truncation
+            if len(code) > 10:  # Only check for non-trivial code
+                # Check for unterminated strings or parentheses
+                if code.count('"') % 2 != 0 or code.count("'") % 2 != 0:
+                    logger.warning("Code appears to have unmatched quotes - possible truncation")
+                    result['stderr'] = "Warning: Code appears to have unmatched quotes. This might indicate the code was truncated during transmission."
+                
+                # Check for unmatched parentheses
+                open_parens = code.count('(') - code.count(')')
+                if open_parens != 0:
+                    logger.warning(f"Code has unmatched parentheses ({open_parens} open) - possible truncation")
+                    result['stderr'] = f"Warning: Code has {open_parens} unmatched opening parentheses. This might indicate the code was truncated during transmission."
+            
+            # Test compilation first
+            try:
+                compile(code, '<string>', 'exec')
+                logger.debug("Code compilation successful")
+            except SyntaxError as e:
+                logger.error(f"Syntax error during compilation: {e}")
+                logger.error(f"Error line: {e.lineno}")
+                logger.error(f"Error text: {e.text}")
+                logger.error(f"Error position: {e.offset}")
+                
+                # Provide helpful error message if it looks like truncation
+                if 'was never closed' in str(e) or 'unterminated' in str(e).lower():
+                    error_msg = (f"Syntax error: {e}\n\n"
+                               f"This error often occurs when code is truncated during transmission.\n"
+                               f"The code received was {len(code)} characters long with {code.count(chr(10)) + 1} lines.\n"
+                               f"Please try sending the code in smaller chunks or verify the complete code was transmitted.")
+                    result['stderr'] = error_msg
+                    result['error'] = {
+                        'type': 'TruncationError',
+                        'message': error_msg,
+                        'original_error': str(e),
+                        'code_length': len(code),
+                        'code_lines': code.count(chr(10)) + 1
+                    }
+                    return json.dumps(result, indent=2)
+                
+                raise
             exec(code, ctx.execution_globals)
         
         # Interactive REPL mode
@@ -528,15 +963,31 @@ def execute(code: str, interactive: bool = False, web_app_type: Optional[str] = 
 
 @mcp.tool
 def list_artifacts() -> str:
-    """List all current artifacts."""
+    """List all current artifacts with detailed information."""
     artifacts = collect_artifacts()
     if not artifacts:
         return "No artifacts found."
     
     result = "Current artifacts:\n"
-    for artifact in artifacts:
-        result += f"- {artifact['name']} ({artifact['size']} bytes) - {artifact['type']}\n"
+    result += "=" * 50 + "\n"
     
+    # Group artifacts by category
+    by_category = {}
+    for artifact in artifacts:
+        category = artifact.get('category', 'root')
+        if category not in by_category:
+            by_category[category] = []
+        by_category[category].append(artifact)
+    
+    for category, items in by_category.items():
+        result += f"\n{category.upper()}:\n"
+        result += "-" * 20 + "\n"
+        for artifact in items:
+            size_kb = artifact['size'] / 1024
+            result += f"  • {artifact['name']} ({size_kb:.1f} KB) - {artifact['type']}\n"
+            result += f"    Path: {artifact['relative_path']}\n"
+    
+    result += f"\nTotal: {len(artifacts)} artifacts\n"
     return result
 
 @mcp.tool
@@ -1098,6 +1549,454 @@ def execute_with_artifacts(code: str, track_artifacts: bool = True) -> str:
                 result['artifact_report'] = temp_ctx.get_artifact_report()
     
     return json.dumps(result, indent=2)
+
+@mcp.tool
+def backup_current_artifacts(backup_name: str = None) -> str:
+    """Create a backup of current artifacts with optional custom name.
+    
+    Args:
+        backup_name: Optional custom name for the backup
+    
+    Returns:
+        JSON string with backup information
+    """
+    backup_path = ctx.backup_artifacts(backup_name)
+    
+    if backup_path and backup_path != "No artifacts directory to backup":
+        return json.dumps({
+            'status': 'success',
+            'backup_path': backup_path,
+            'backup_name': Path(backup_path).name,
+            'message': f'Artifacts backed up successfully to {Path(backup_path).name}'
+        }, indent=2)
+    else:
+        return json.dumps({
+            'status': 'error',
+            'message': backup_path or 'Failed to create backup'
+        }, indent=2)
+
+@mcp.tool
+def list_artifact_backups() -> str:
+    """List all available artifact backups with detailed information.
+    
+    Returns:
+        JSON string with backup listing
+    """
+    backups = ctx.list_artifact_backups()
+    
+    if not backups:
+        return json.dumps({
+            'status': 'no_backups',
+            'message': 'No artifact backups found',
+            'backups': []
+        }, indent=2)
+    
+    # Format timestamps for better readability
+    import datetime
+    for backup in backups:
+        backup['created_formatted'] = datetime.datetime.fromtimestamp(backup['created']).strftime('%Y-%m-%d %H:%M:%S')
+        backup['modified_formatted'] = datetime.datetime.fromtimestamp(backup['modified']).strftime('%Y-%m-%d %H:%M:%S')
+    
+    return json.dumps({
+        'status': 'success',
+        'total_backups': len(backups),
+        'backups': backups,
+        'message': f'Found {len(backups)} artifact backups'
+    }, indent=2)
+
+@mcp.tool
+def rollback_to_backup(backup_name: str) -> str:
+    """Rollback artifacts to a previous backup version.
+    
+    Args:
+        backup_name: Name of the backup to rollback to
+    
+    Returns:
+        JSON string with rollback results
+    """
+    result = ctx.rollback_artifacts(backup_name)
+    
+    if "Successfully rolled back" in result:
+        return json.dumps({
+            'status': 'success',
+            'message': result,
+            'backup_name': backup_name
+        }, indent=2)
+    else:
+        return json.dumps({
+            'status': 'error',
+            'message': result,
+            'backup_name': backup_name
+        }, indent=2)
+
+@mcp.tool
+def get_backup_details(backup_name: str) -> str:
+    """Get detailed information about a specific backup.
+    
+    Args:
+        backup_name: Name of the backup to inspect
+    
+    Returns:
+        JSON string with backup details
+    """
+    backup_info = ctx.get_backup_info(backup_name)
+    
+    if 'error' in backup_info:
+        return json.dumps({
+            'status': 'error',
+            'message': backup_info['error']
+        }, indent=2)
+    
+    # Format timestamp for readability
+    import datetime
+    backup_info['created_formatted'] = datetime.datetime.fromtimestamp(backup_info['created']).strftime('%Y-%m-%d %H:%M:%S')
+    backup_info['modified_formatted'] = datetime.datetime.fromtimestamp(backup_info['modified']).strftime('%Y-%m-%d %H:%M:%S')
+    backup_info['total_size_mb'] = backup_info['total_size_bytes'] / (1024 * 1024)
+    
+    return json.dumps({
+        'status': 'success',
+        'backup_info': backup_info
+    }, indent=2)
+
+@mcp.tool
+def cleanup_old_backups(max_backups: int = 10) -> str:
+    """Clean up old backups, keeping only the most recent ones.
+    
+    Args:
+        max_backups: Maximum number of backups to keep
+    
+    Returns:
+        JSON string with cleanup results
+    """
+    backup_root = ctx.project_root / "artifact_backups"
+    if not backup_root.exists():
+        return json.dumps({
+            'status': 'no_backups',
+            'message': 'No backup directory found',
+            'cleaned_count': 0
+        }, indent=2)
+    
+    try:
+        # Get all backup directories sorted by modification time
+        backups = [d for d in backup_root.iterdir() if d.is_dir()]
+        backups.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        
+        cleaned_count = 0
+        for backup in backups[max_backups:]:
+            try:
+                shutil.rmtree(backup, ignore_errors=True)
+                cleaned_count += 1
+                logger.info(f"Removed old backup: {backup}")
+            except Exception as e:
+                logger.warning(f"Failed to remove backup {backup}: {e}")
+        
+        return json.dumps({
+            'status': 'success',
+            'cleaned_count': cleaned_count,
+            'remaining_backups': len(backups[:max_backups]),
+            'max_backups': max_backups,
+            'message': f'Cleaned up {cleaned_count} old backups, kept {len(backups[:max_backups])} most recent'
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to cleanup backups: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def export_web_app(code: str, app_type: str = 'flask', export_name: str = None) -> str:
+    """Export a web application as Docker container for persistence.
+    
+    Args:
+        code: The web application code
+        app_type: Type of web app ('flask' or 'streamlit')
+        export_name: Optional custom name for the export
+    
+    Returns:
+        JSON string with export results
+    """
+    if app_type == 'flask':
+        result = export_flask_app(code, export_name)
+    elif app_type == 'streamlit':
+        result = export_streamlit_app(code, export_name)
+    else:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Unsupported app type: {app_type}. Use "flask" or "streamlit"'
+        }, indent=2)
+    
+    return json.dumps(result, indent=2)
+
+@mcp.tool
+def list_web_app_exports() -> str:
+    """List all exported web applications.
+    
+    Returns:
+        JSON string with export listing
+    """
+    if not ctx.artifacts_dir:
+        return json.dumps({
+            'status': 'no_exports',
+            'message': 'No artifacts directory found',
+            'exports': []
+        }, indent=2)
+    
+    exports_dir = ctx.artifacts_dir / "exports"
+    if not exports_dir.exists():
+        return json.dumps({
+            'status': 'no_exports',
+            'message': 'No exports directory found',
+            'exports': []
+        }, indent=2)
+    
+    exports = []
+    for export_dir in exports_dir.iterdir():
+        if export_dir.is_dir():
+            try:
+                # Determine app type from files
+                app_type = 'unknown'
+                if (export_dir / 'app.py').exists():
+                    with open(export_dir / 'app.py', 'r') as f:
+                        content = f.read()
+                        if 'Flask' in content or 'flask' in content:
+                            app_type = 'flask'
+                        elif 'streamlit' in content or 'st.' in content:
+                            app_type = 'streamlit'
+                
+                # Get export info
+                stat = export_dir.stat()
+                files = list(export_dir.glob('*'))
+                
+                export_info = {
+                    'name': export_dir.name,
+                    'path': str(export_dir),
+                    'app_type': app_type,
+                    'created': stat.st_ctime,
+                    'modified': stat.st_mtime,
+                    'files': [f.name for f in files if f.is_file()],
+                    'has_dockerfile': (export_dir / 'Dockerfile').exists(),
+                    'has_compose': (export_dir / 'docker-compose.yml').exists(),
+                    'has_requirements': (export_dir / 'requirements.txt').exists()
+                }
+                
+                # Format timestamps
+                import datetime
+                export_info['created_formatted'] = datetime.datetime.fromtimestamp(export_info['created']).strftime('%Y-%m-%d %H:%M:%S')
+                export_info['modified_formatted'] = datetime.datetime.fromtimestamp(export_info['modified']).strftime('%Y-%m-%d %H:%M:%S')
+                
+                exports.append(export_info)
+                
+            except Exception as e:
+                logger.warning(f"Failed to read export {export_dir}: {e}")
+    
+    # Sort by creation time (newest first)
+    exports.sort(key=lambda x: x['created'], reverse=True)
+    
+    return json.dumps({
+        'status': 'success',
+        'total_exports': len(exports),
+        'exports': exports,
+        'message': f'Found {len(exports)} exported web applications'
+    }, indent=2)
+
+@mcp.tool
+def get_export_details(export_name: str) -> str:
+    """Get detailed information about a specific web app export.
+    
+    Args:
+        export_name: Name of the export to inspect
+    
+    Returns:
+        JSON string with export details
+    """
+    if not ctx.artifacts_dir:
+        return json.dumps({
+            'status': 'error',
+            'message': 'No artifacts directory found'
+        }, indent=2)
+    
+    export_dir = ctx.artifacts_dir / "exports" / export_name
+    if not export_dir.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': f'Export "{export_name}" not found'
+        }, indent=2)
+    
+    try:
+        # Read all files in the export
+        files = {}
+        for file_path in export_dir.glob('*'):
+            if file_path.is_file():
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        files[file_path.name] = f.read()
+                except Exception as e:
+                    files[file_path.name] = f"Error reading file: {str(e)}"
+        
+        # Get directory stats
+        stat = export_dir.stat()
+        
+        # Determine app type
+        app_type = 'unknown'
+        if 'app.py' in files:
+            if 'Flask' in files['app.py'] or 'flask' in files['app.py']:
+                app_type = 'flask'
+            elif 'streamlit' in files['app.py'] or 'st.' in files['app.py']:
+                app_type = 'streamlit'
+        
+        export_info = {
+            'name': export_name,
+            'path': str(export_dir),
+            'app_type': app_type,
+            'created': stat.st_ctime,
+            'modified': stat.st_mtime,
+            'files': files,
+            'total_files': len(files)
+        }
+        
+        # Format timestamps
+        import datetime
+        export_info['created_formatted'] = datetime.datetime.fromtimestamp(export_info['created']).strftime('%Y-%m-%d %H:%M:%S')
+        export_info['modified_formatted'] = datetime.datetime.fromtimestamp(export_info['modified']).strftime('%Y-%m-%d %H:%M:%S')
+        
+        return json.dumps({
+            'status': 'success',
+            'export_info': export_info
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to get export details: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def build_docker_image(export_name: str) -> str:
+    """Build Docker image for an exported web application.
+    
+    Args:
+        export_name: Name of the export to build
+    
+    Returns:
+        JSON string with build results
+    """
+    if not ctx.artifacts_dir:
+        return json.dumps({
+            'status': 'error',
+            'message': 'No artifacts directory found'
+        }, indent=2)
+    
+    export_dir = ctx.artifacts_dir / "exports" / export_name
+    if not export_dir.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': f'Export "{export_name}" not found'
+        }, indent=2)
+    
+    dockerfile_path = export_dir / "Dockerfile"
+    if not dockerfile_path.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': f'No Dockerfile found in export "{export_name}"'
+        }, indent=2)
+    
+    try:
+        # Build Docker image
+        image_name = f'sandbox-{export_name}'
+        build_result = subprocess.run(
+            ['docker', 'build', '-t', image_name, str(export_dir)],
+            capture_output=True,
+            text=True,
+            timeout=600  # 10 minute timeout
+        )
+        
+        if build_result.returncode == 0:
+            return json.dumps({
+                'status': 'success',
+                'image_name': image_name,
+                'export_name': export_name,
+                'build_output': build_result.stdout,
+                'message': f'Docker image "{image_name}" built successfully'
+            }, indent=2)
+        else:
+            return json.dumps({
+                'status': 'error',
+                'build_output': build_result.stdout,
+                'build_error': build_result.stderr,
+                'message': f'Docker build failed for "{export_name}"'
+            }, indent=2)
+            
+    except subprocess.TimeoutExpired:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Docker build timed out for "{export_name}"'
+        }, indent=2)
+    except FileNotFoundError:
+        return json.dumps({
+            'status': 'error',
+            'message': 'Docker not found. Please install Docker to build images.'
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to build Docker image: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def cleanup_web_app_export(export_name: str) -> str:
+    """Remove an exported web application.
+    
+    Args:
+        export_name: Name of the export to remove
+    
+    Returns:
+        JSON string with cleanup results
+    """
+    if not ctx.artifacts_dir:
+        return json.dumps({
+            'status': 'error',
+            'message': 'No artifacts directory found'
+        }, indent=2)
+    
+    export_dir = ctx.artifacts_dir / "exports" / export_name
+    if not export_dir.exists():
+        return json.dumps({
+            'status': 'error',
+            'message': f'Export "{export_name}" not found'
+        }, indent=2)
+    
+    try:
+        # Remove export directory
+        shutil.rmtree(export_dir)
+        
+        # Try to remove Docker image if it exists
+        docker_cleaned = False
+        try:
+            image_name = f'sandbox-{export_name}'
+            remove_result = subprocess.run(
+                ['docker', 'rmi', image_name],
+                capture_output=True,
+                text=True,
+                timeout=30
+            )
+            if remove_result.returncode == 0:
+                docker_cleaned = True
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass  # Docker not available or image doesn't exist
+        
+        return json.dumps({
+            'status': 'success',
+            'export_name': export_name,
+            'docker_image_removed': docker_cleaned,
+            'message': f'Export "{export_name}" cleaned up successfully'
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to cleanup export: {str(e)}'
+        }, indent=2)
 
 def main():
     """Entry point for the stdio MCP server."""

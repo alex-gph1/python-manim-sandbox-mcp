@@ -61,11 +61,28 @@ class TestSandboxBasics(unittest.TestCase):
     
     def test_collect_artifacts_empty(self):
         """Test artifact collection when no artifacts exist.""" 
-        artifacts = collect_artifacts()
+        # Create a clean context with no artifacts
+        ctx = ExecutionContext()
+        ctx.artifacts_dir = None
         
-        # Should return empty list when no artifacts
-        self.assertIsInstance(artifacts, list)
-        self.assertEqual(len(artifacts), 0)
+        # Import the function and set the global context temporarily
+        from sandbox.mcp_sandbox_server_stdio import collect_artifacts
+        import sandbox.mcp_sandbox_server_stdio as server_module
+        
+        # Save original context
+        original_ctx = server_module.ctx
+        
+        try:
+            # Set our clean context
+            server_module.ctx = ctx
+            artifacts = collect_artifacts()
+            
+            # Should return empty list when no artifacts
+            self.assertIsInstance(artifacts, list)
+            self.assertEqual(len(artifacts), 0)
+        finally:
+            # Restore original context
+            server_module.ctx = original_ctx
     
     def test_module_imports(self):
         """Test that the enhanced modules can be imported."""

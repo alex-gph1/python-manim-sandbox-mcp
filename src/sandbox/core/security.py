@@ -533,7 +533,13 @@ class SecurityManager:
             return False, violation
         
         # Check command patterns
-        return self.command_filter.check_command(command)
+        is_safe, violation = self.command_filter.check_command(command)
+        
+        # Log violation if found
+        if not is_safe and violation:
+            self.auditor.log_violation(violation)
+        
+        return is_safe, violation
     
     def check_path_security(self, path: str) -> Tuple[bool, Optional[str]]:
         """Check if a path is safe to access."""
@@ -567,6 +573,6 @@ _security_manager = None
 def get_security_manager(level: SecurityLevel = SecurityLevel.MEDIUM) -> SecurityManager:
     """Get the global security manager instance."""
     global _security_manager
-    if _security_manager is None:
+    if _security_manager is None or _security_manager.security_level != level:
         _security_manager = SecurityManager(level)
     return _security_manager
