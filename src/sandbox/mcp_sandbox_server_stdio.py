@@ -2283,13 +2283,17 @@ def install_package(package_name: str, version: str = None) -> str:
             env = os.environ.copy()
             env['VIRTUAL_ENV'] = str(ctx.venv_path)
             
+            # Set working directory for uv commands (need project root)
+            working_dir = str(ctx.project_root) if method['tool'].startswith('uv') else None
+            
             # Attempt installation
             install_result = subprocess.run(
                 method['command'],
                 capture_output=True,
                 text=True,
                 timeout=300,  # 5 minute timeout
-                env=env
+                env=env,
+                cwd=working_dir
             )
             
             attempts.append({
