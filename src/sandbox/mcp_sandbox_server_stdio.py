@@ -176,7 +176,7 @@ def monkey_patch_matplotlib():
         return False
 
 def execute_manim_code(manim_code: str, quality: str = 'medium_quality') -> Dict[str, Any]:
-    """Execute Manim code and save animation to artifacts directory."""
+    """Execute Manim code and save animation to artifacts directory with enhanced support."""
     if not ctx.artifacts_dir:
         ctx.create_artifacts_dir()
     
@@ -193,10 +193,18 @@ def execute_manim_code(manim_code: str, quality: str = 'medium_quality') -> Dict
         'error': None,
         'video_path': None,
         'animation_id': animation_id,
-        'artifacts_dir': str(manim_dir)
+        'artifacts_dir': str(manim_dir),
+        'scenes_found': [],
+        'execution_time': 0
     }
     
+    start_time = time.time()
+    
     try:
+        # Enhance Manim code with proper imports if missing
+        if 'from manim import *' not in manim_code and 'import manim' not in manim_code:
+            manim_code = 'from manim import *\n' + manim_code
+        
         # Write the Manim script
         with open(script_path, 'w') as f:
             f.write(manim_code)
@@ -209,47 +217,83 @@ def execute_manim_code(manim_code: str, quality: str = 'medium_quality') -> Dict
             'production_quality': ['-qp']
         }.get(quality, ['-qm'])
         
-        # Execute Manim using virtual environment path
-        manim_executable = ctx.venv_path / 'bin' / 'manim'
-        if not manim_executable.exists():
-            # Fallback to system manim if not in venv
-            manim_executable = 'manim'
+        # Try to use virtual environment first
+        manim_executable = None
+        if ctx.venv_path.exists():
+            venv_manim = ctx.venv_path / 'bin' / 'manim'
+            if venv_manim.exists():
+                manim_executable = str(venv_manim)
         
-        cmd = [str(manim_executable)] + quality_flags + [str(script_path)]
+        # Fallback to system manim or python -m manim
+        if not manim_executable:
+            # Try python -m manim with virtual environment python
+            if ctx.venv_path.exists():
+                venv_python = ctx.venv_path / 'bin' / 'python'
+                if venv_python.exists():
+                    cmd = [str(venv_python), '-m', 'manim'] + quality_flags + [str(script_path)]
+                else:
+                    cmd = [sys.executable, '-m', 'manim'] + quality_flags + [str(script_path)]
+            else:
+                cmd = [sys.executable, '-m', 'manim'] + quality_flags + [str(script_path)]
+        else:
+            cmd = [manim_executable] + quality_flags + [str(script_path)]
+        
+        # Set up environment for Manim execution
+        env = os.environ.copy()
+        if ctx.venv_path.exists():
+            env['VIRTUAL_ENV'] = str(ctx.venv_path)
+            env['PATH'] = f"{ctx.venv_path / 'bin'}{os.pathsep}{env.get('PATH', '')}"
+        
+        logger.info(f"Executing Manim with command: {' '.join(cmd)}")
         
         process = subprocess.run(
             cmd,
             cwd=str(manim_dir),
             capture_output=True,
             text=True,
-            timeout=300  # 5 minute timeout
+            timeout=300,  # 5 minute timeout
+            env=env
         )
         
         result['output'] = process.stdout
+        result['execution_time'] = time.time() - start_time
         
         if process.returncode == 0:
             result['success'] = True
             
-            # Find the generated video file
+            # Find the generated files
             media_dir = manim_dir / "media"
             if media_dir.exists():
                 # Look for video files
                 video_files = list(media_dir.rglob("*.mp4"))
+                image_files = list(media_dir.rglob("*.png"))
+                
                 if video_files:
                     result['video_path'] = str(video_files[0])
                     logger.info(f"Manim animation saved to: {video_files[0]}")
-                else:
-                    result['error'] = 'No video file generated'
+                
+                if image_files:
+                    result['image_files'] = [str(f) for f in image_files]
+                
+                # Extract scene names from output
+                import re
+                scene_matches = re.findall(r'Scene: ([A-Za-z0-9_]+)', result['output'])
+                result['scenes_found'] = scene_matches
+                
+                if not video_files and not image_files:
+                    result['error'] = 'No output files generated'
             else:
                 result['error'] = 'No media directory found'
         else:
             result['success'] = False
-            result['error'] = process.stderr
+            result['error'] = process.stderr or 'Manim execution failed'
             
     except subprocess.TimeoutExpired:
         result['error'] = 'Manim execution timed out (5 minutes)'
+        result['execution_time'] = time.time() - start_time
     except Exception as e:
         result['error'] = f'Error during Manim execution: {str(e)}'
+        result['execution_time'] = time.time() - start_time
         logger.error(f"Manim execution error: {e}")
     
     return result
@@ -821,6 +865,239 @@ def get_execution_info() -> str:
         'manim_available': shutil.which('manim') is not None
     }
     return json.dumps(info, indent=2)
+
+@mcp.tool
+def get_artifact_report() -> str:
+    """Get comprehensive artifact report with categorization and metadata."""
+    if not ctx.artifacts_dir or not ctx.artifacts_dir.exists():
+        return json.dumps({
+            'status': 'no_artifacts',
+            'message': 'No artifacts directory found. Execute some code first.'
+        }, indent=2)
+    
+    # Use the enhanced artifact system from PersistentExecutionContext
+    from .core.execution_context import PersistentExecutionContext
+    
+    # Create a temporary context to use the enhanced artifact methods
+    temp_ctx = PersistentExecutionContext()
+    temp_ctx.artifacts_dir = ctx.artifacts_dir
+    
+    try:
+        report = temp_ctx.get_artifact_report()
+        return json.dumps(report, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to generate artifact report: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def categorize_artifacts() -> str:
+    """Categorize artifacts by type with detailed metadata."""
+    if not ctx.artifacts_dir or not ctx.artifacts_dir.exists():
+        return json.dumps({
+            'status': 'no_artifacts',
+            'message': 'No artifacts directory found. Execute some code first.'
+        }, indent=2)
+    
+    # Use the enhanced artifact system from PersistentExecutionContext
+    from .core.execution_context import PersistentExecutionContext
+    
+    # Create a temporary context to use the enhanced artifact methods
+    temp_ctx = PersistentExecutionContext()
+    temp_ctx.artifacts_dir = ctx.artifacts_dir
+    
+    try:
+        categories = temp_ctx.categorize_artifacts()
+        return json.dumps(categories, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to categorize artifacts: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def cleanup_artifacts_by_type(artifact_type: str) -> str:
+    """Clean up artifacts of a specific type.
+    
+    Args:
+        artifact_type: Type of artifacts to clean (e.g., 'images', 'videos', 'plots', 'manim')
+    
+    Returns:
+        JSON string with cleanup results
+    """
+    if not ctx.artifacts_dir or not ctx.artifacts_dir.exists():
+        return json.dumps({
+            'status': 'no_artifacts',
+            'message': 'No artifacts directory found.'
+        }, indent=2)
+    
+    # Use the enhanced artifact system from PersistentExecutionContext
+    from .core.execution_context import PersistentExecutionContext
+    
+    # Create a temporary context to use the enhanced artifact methods
+    temp_ctx = PersistentExecutionContext()
+    temp_ctx.artifacts_dir = ctx.artifacts_dir
+    
+    try:
+        categorized = temp_ctx.categorize_artifacts()
+        
+        if artifact_type not in categorized:
+            return json.dumps({
+                'status': 'error',
+                'message': f'Artifact type "{artifact_type}" not found',
+                'available_types': list(categorized.keys())
+            }, indent=2)
+        
+        cleaned_count = 0
+        for file_info in categorized[artifact_type]:
+            try:
+                file_path = Path(file_info['full_path'])
+                if file_path.exists():
+                    file_path.unlink()
+                    cleaned_count += 1
+            except Exception as e:
+                logger.warning(f"Failed to delete {file_info['path']}: {e}")
+        
+        return json.dumps({
+            'status': 'success',
+            'artifact_type': artifact_type,
+            'cleaned_count': cleaned_count,
+            'message': f'Successfully cleaned {cleaned_count} {artifact_type} artifacts'
+        }, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to cleanup artifacts: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def start_enhanced_repl() -> str:
+    """Start an enhanced REPL session with IPython support and magic commands."""
+    try:
+        # Check if IPython is available
+        try:
+            import IPython
+            ipython_available = True
+        except ImportError:
+            ipython_available = False
+        
+        repl_info = {
+            'status': 'repl_started',
+            'ipython_available': ipython_available,
+            'features': {
+                'tab_completion': ipython_available,
+                'history': ipython_available,
+                'magic_commands': ipython_available,
+                'syntax_highlighting': ipython_available,
+                'artifact_management': True,
+                'manim_support': True,
+                'virtual_env': ctx.venv_path.exists()
+            },
+            'available_magic_commands': [
+                '%artifacts - List and manage artifacts',
+                '%manim - Execute Manim animations',
+                '%save_session - Save current session variables',
+                '%load_session - Load saved session',
+                '%clear_cache - Clear compilation cache',
+                '%env_info - Show environment information'
+            ],
+            'globals_available': list(ctx.execution_globals.keys()),
+            'artifacts_dir': str(ctx.artifacts_dir) if ctx.artifacts_dir else None,
+            'virtual_env': os.environ.get('VIRTUAL_ENV'),
+            'message': 'Enhanced REPL session started with artifact management and Manim support'
+        }
+        
+        return json.dumps(repl_info, indent=2)
+        
+    except Exception as e:
+        return json.dumps({
+            'status': 'error',
+            'message': f'Failed to start enhanced REPL: {str(e)}'
+        }, indent=2)
+
+@mcp.tool
+def execute_with_artifacts(code: str, track_artifacts: bool = True) -> str:
+    """Execute Python code with enhanced artifact tracking and categorization.
+    
+    Args:
+        code: Python code to execute
+        track_artifacts: Whether to track and categorize artifacts
+    
+    Returns:
+        JSON string with execution results and detailed artifact information
+    """
+    # Create artifacts directory for this execution
+    artifacts_dir = ctx.create_artifacts_dir()
+    
+    # Set up monkey patches
+    matplotlib_patched = monkey_patch_matplotlib()
+    pil_patched = monkey_patch_pil()
+    
+    # Track artifacts before execution
+    from .core.execution_context import PersistentExecutionContext
+    temp_ctx = PersistentExecutionContext()
+    temp_ctx.artifacts_dir = Path(artifacts_dir)
+    
+    artifacts_before = temp_ctx._get_current_artifacts() if track_artifacts else set()
+    
+    # Capture stdout and stderr
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    stdout_capture = io.StringIO()
+    stderr_capture = io.StringIO()
+    
+    result = {
+        'stdout': '',
+        'stderr': '',
+        'error': None,
+        'artifacts': [],
+        'artifact_report': None,
+        'execution_info': {
+            'sys_executable': sys.executable,
+            'artifacts_dir': artifacts_dir,
+            'matplotlib_patched': matplotlib_patched,
+            'pil_patched': pil_patched,
+            'track_artifacts': track_artifacts
+        }
+    }
+    
+    try:
+        sys.stdout = stdout_capture
+        sys.stderr = stderr_capture
+        
+        # Execute the code
+        exec(code, ctx.execution_globals)
+        
+    except Exception as e:
+        # Handle exceptions
+        error_trace = traceback.format_exc()
+        result['error'] = {
+            'type': type(e).__name__,
+            'message': str(e),
+            'traceback': error_trace
+        }
+        result['stderr'] = f"Error: {e}\n\nFull traceback:\n{error_trace}"
+    
+    finally:
+        # Restore stdout/stderr
+        sys.stdout = old_stdout
+        sys.stderr = old_stderr
+        
+        # Capture output
+        result['stdout'] = stdout_capture.getvalue()
+        result['stderr'] += stderr_capture.getvalue()
+        
+        # Track new artifacts
+        if track_artifacts:
+            artifacts_after = temp_ctx._get_current_artifacts()
+            new_artifacts = artifacts_after - artifacts_before
+            
+            if new_artifacts:
+                result['artifacts'] = list(new_artifacts)
+                result['artifact_report'] = temp_ctx.get_artifact_report()
+    
+    return json.dumps(result, indent=2)
 
 def main():
     """Entry point for the stdio MCP server."""
