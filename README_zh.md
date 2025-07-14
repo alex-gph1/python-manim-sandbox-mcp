@@ -132,7 +132,116 @@ sandbox-server-stdio
 
 ## 💡 示例
 
-### 基本 Python 执行
+### 增强 SDK 使用
+
+#### 本地 Python 执行
+
+```python
+import asyncio
+from sandbox import PythonSandbox
+
+async def local_example():
+    async with PythonSandbox.create_local(name="my-sandbox") as sandbox:
+        # 执行 Python 代码
+        result = await sandbox.run("print('你好，来自本地沙盒！')")
+        print(await result.output())
+        
+        # 执行带工件的代码
+        plot_code = """
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+plt.figure(figsize=(8, 6))
+plt.plot(x, y)
+plt.title('正弦波')
+plt.show()  # 自动捕获为工件
+"""
+        result = await sandbox.run(plot_code)
+        print(f"创建的工件: {result.artifacts}")
+        
+        # 执行 shell 命令
+        cmd_result = await sandbox.command.run("ls", ["-la"])
+        print(await cmd_result.output())
+
+asyncio.run(local_example())
+```
+
+#### 远程 Python 执行（使用 microsandbox）
+
+```python
+import asyncio
+from sandbox import PythonSandbox
+
+async def remote_example():
+    async with PythonSandbox.create_remote(
+        server_url="http://127.0.0.1:5555",
+        api_key="your-api-key",
+        name="remote-sandbox"
+    ) as sandbox:
+        # 在安全微虚拟机中执行 Python 代码
+        result = await sandbox.run("print('你好，来自微虚拟机！')")
+        print(await result.output())
+        
+        # 获取沙盒指标
+        metrics = await sandbox.metrics.all()
+        print(f"CPU 使用率: {metrics.get('cpu_usage', 0)}%")
+        print(f"内存使用: {metrics.get('memory_usage', 0)} MB")
+
+asyncio.run(remote_example())
+```
+
+#### Node.js 执行
+
+```python
+import asyncio
+from sandbox import NodeSandbox
+
+async def node_example():
+    async with NodeSandbox.create(
+        server_url="http://127.0.0.1:5555",
+        api_key="your-api-key",
+        name="node-sandbox"
+    ) as sandbox:
+        # 执行 JavaScript 代码
+        js_code = """
+console.log('你好，来自 Node.js！');
+const sum = [1, 2, 3, 4, 5].reduce((a, b) => a + b, 0);
+console.log(`总和: ${sum}`);
+"""
+        result = await sandbox.run(js_code)
+        print(await result.output())
+
+asyncio.run(node_example())
+```
+
+#### 构建者模式配置
+
+```python
+import asyncio
+from sandbox import LocalSandbox, SandboxOptions
+
+async def builder_example():
+    config = (SandboxOptions.builder()
+              .name("configured-sandbox")
+              .memory(1024)
+              .cpus(2.0)
+              .timeout(300.0)
+              .env("DEBUG", "true")
+              .build())
+    
+    async with LocalSandbox.create(**config.__dict__) as sandbox:
+        result = await sandbox.run("import os; print(os.environ.get('DEBUG'))")
+        print(await result.output())  # 应该输出: true
+
+asyncio.run(builder_example())
+```
+
+### MCP 服务器示例
+
+#### 基本 Python 执行
 
 ```python
 # 执行简单代码
