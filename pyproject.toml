@@ -21,7 +21,7 @@ sandbox-server = "sandbox.mcp_sandbox_server:main"
 sandbox-server-stdio = "sandbox.mcp_sandbox_server_stdio:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src"]
+packages = ["src/sandbox"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
