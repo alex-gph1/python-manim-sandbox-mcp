@@ -1,6 +1,6 @@
-# Sandbox MCP
+# Enhanced Sandbox SDK
 
-> Production-ready MCP server for secure Python code execution with artifact capture, virtual environment support, and LM Studio integration
+> Production-ready sandbox execution environment with both local and remote capabilities, featuring microsandbox integration for secure microVM isolation and comprehensive MCP server support
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.10.5-green.svg)](https://github.com/jlowin/fastmcp)
@@ -55,6 +55,16 @@ uv run sandbox-server-stdio
 - **Dual Transport**: HTTP and stdio support
 - **LM Studio Ready**: Drop-in integration for AI models
 - **FastMCP Powered**: Modern MCP implementation
+
+### 🚀 **Enhanced SDK (NEW)**
+- **Unified Interface**: Single API for both local and remote execution
+- **Microsandbox Integration**: Secure microVM isolation for untrusted code
+- **Multi-Language Support**: Python and Node.js execution environments
+- **Builder Pattern**: Fluent configuration API with SandboxOptions
+- **Async/Await**: Modern Python async support throughout
+- **Command Execution**: Safe shell command execution with security filtering
+- **Metrics & Monitoring**: Real-time resource usage monitoring
+- **Artifact Management**: Automatic capture and management of generated files
 
 ## 📦 Installation
 
@@ -128,7 +138,116 @@ Add to your LM Studio MCP configuration:
 
 ## 💡 Examples
 
-### Basic Python Execution
+### Enhanced SDK Usage
+
+#### Local Python Execution
+
+```python
+import asyncio
+from sandbox import PythonSandbox
+
+async def local_example():
+    async with PythonSandbox.create_local(name="my-sandbox") as sandbox:
+        # Execute Python code
+        result = await sandbox.run("print('Hello from local sandbox!')")
+        print(await result.output())
+        
+        # Execute code with artifacts
+        plot_code = """
+import matplotlib.pyplot as plt
+import numpy as np
+
+x = np.linspace(0, 10, 100)
+y = np.sin(x)
+
+plt.figure(figsize=(8, 6))
+plt.plot(x, y)
+plt.title('Sine Wave')
+plt.show()  # Automatically captured as artifact
+"""
+        result = await sandbox.run(plot_code)
+        print(f"Artifacts created: {result.artifacts}")
+        
+        # Execute shell commands
+        cmd_result = await sandbox.command.run("ls", ["-la"])
+        print(await cmd_result.output())
+
+asyncio.run(local_example())
+```
+
+#### Remote Python Execution (with microsandbox)
+
+```python
+import asyncio
+from sandbox import PythonSandbox
+
+async def remote_example():
+    async with PythonSandbox.create_remote(
+        server_url="http://127.0.0.1:5555",
+        api_key="your-api-key",
+        name="remote-sandbox"
+    ) as sandbox:
+        # Execute Python code in secure microVM
+        result = await sandbox.run("print('Hello from microVM!')")
+        print(await result.output())
+        
+        # Get sandbox metrics
+        metrics = await sandbox.metrics.all()
+        print(f"CPU usage: {metrics.get('cpu_usage', 0)}%")
+        print(f"Memory usage: {metrics.get('memory_usage', 0)} MB")
+
+asyncio.run(remote_example())
+```
+
+#### Node.js Execution
+
+```python
+import asyncio
+from sandbox import NodeSandbox
+
+async def node_example():
+    async with NodeSandbox.create(
+        server_url="http://127.0.0.1:5555",
+        api_key="your-api-key",
+        name="node-sandbox"
+    ) as sandbox:
+        # Execute JavaScript code
+        js_code = """
+console.log('Hello from Node.js!');
+const sum = [1, 2, 3, 4, 5].reduce((a, b) => a + b, 0);
+console.log(`Sum: ${sum}`);
+"""
+        result = await sandbox.run(js_code)
+        print(await result.output())
+
+asyncio.run(node_example())
+```
+
+#### Builder Pattern Configuration
+
+```python
+import asyncio
+from sandbox import LocalSandbox, SandboxOptions
+
+async def builder_example():
+    config = (SandboxOptions.builder()
+              .name("configured-sandbox")
+              .memory(1024)
+              .cpus(2.0)
+              .timeout(300.0)
+              .env("DEBUG", "true")
+              .build())
+    
+    async with LocalSandbox.create(**config.__dict__) as sandbox:
+        result = await sandbox.run("import os; print(os.environ.get('DEBUG'))")
+        print(await result.output())  # Should print: true
+
+asyncio.run(builder_example())
+```
+
+### MCP Server Examples
+
+#### Basic Python Execution
 
 ```python
 # Execute simple code
@@ -464,7 +583,29 @@ Add to LM Studio MCP settings:
 
 [Apache License](LICENSE)
 
+## Attribution
+
+This project includes minor inspiration from:
+
+- **[Microsandbox](https://github.com/microsandbox/microsandbox.git)** - Referenced for secure microVM isolation concepts
+
+The majority of the functionality in this project is original implementation focused on MCP server integration and enhanced Python execution environments.
+
 ## Changelog
+
+### v0.3.0 (Enhanced SDK Release)
+- **🚀 Enhanced SDK**: Complete integration with microsandbox functionality
+- **🔄 Unified API**: Single interface for both local and remote execution
+- **🛡️ MicroVM Support**: Secure remote execution via microsandbox server
+- **🌐 Multi-Language**: Python and Node.js execution environments
+- **🏗️ Builder Pattern**: Fluent configuration API with SandboxOptions
+- **📊 Metrics & Monitoring**: Real-time resource usage tracking
+- **⚡ Async/Await**: Modern Python async support throughout
+- **🔒 Enhanced Security**: Improved command filtering and validation
+- **📦 Artifact Management**: Comprehensive file artifact handling
+- **🎯 Command Execution**: Safe shell command execution with timeouts
+- **🔧 Configuration**: Flexible sandbox configuration options
+- **📝 Documentation**: Comprehensive examples and usage guides
 
 ### v0.2.0
 - **Manim Integration**: Complete mathematical animation support
