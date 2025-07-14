@@ -1,6 +1,6 @@
 # Enhanced Sandbox SDK
 
-> Production-ready sandbox execution environment with both local and remote capabilities, featuring microsandbox integration for secure microVM isolation and comprehensive MCP server support
+> Production-ready Python sandbox execution environment with comprehensive MCP server support, featuring enhanced artifact management, interactive REPL, and Manim animation capabilities.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.10.5-green.svg)](https://github.com/jlowin/fastmcp)
@@ -22,49 +22,43 @@ uv run sandbox-server-stdio
 
 ## ✨ Features
 
-### 🔧 **Robust Python Execution**
-- **Virtual Environment Detection**: Auto-detects and activates `.venv`
-- **Dynamic sys.path Management**: Intelligent path resolution
+### 🔧 **Enhanced Python Execution**
+- **Code Validation**: Automatic input validation and formatting
+- **Virtual Environment**: Auto-detects and activates `.venv`
 - **Persistent Context**: Variables persist across executions
-- **Enhanced Error Handling**: Detailed ImportError diagnostics
+- **Enhanced Error Handling**: Detailed diagnostics with colored output
+- **Interactive REPL**: Real-time Python shell with tab completion
 
-### 🎨 **Automatic Artifact Capture**
-- **Matplotlib Integration**: Auto-saves plots via `plt.show()` monkey-patching
-- **PIL/Pillow Support**: Captures images from `Image.show()`
-- **Base64 Encoding**: Embeds artifacts directly in responses
-- **Smart Cleanup**: Configurable temp directory management
+### 🎨 **Intelligent Artifact Management**
+- **Automatic Capture**: Matplotlib plots and PIL images
+- **Categorization**: Smart file type detection and organization
+- **Multiple Formats**: JSON, CSV, and structured output
+- **Recursive Scanning**: Deep directory traversal
+- **Smart Cleanup**: Configurable cleanup by type or age
 
-### 🌐 **Web Application Support**
+### 🎬 **Manim Animation Support**
+- **Pre-compiled Examples**: One-click animation execution
+- **Quality Control**: Multiple rendering presets
+- **Video Generation**: Auto-saves MP4 animations
+- **Example Library**: Built-in templates and tutorials
+- **Environment Verification**: Automatic dependency checking
+
+### 🌐 **Web Application Hosting**
 - **Flask & Streamlit**: Launch web apps with auto port detection
 - **Process Management**: Track and manage running servers
 - **URL Generation**: Returns accessible endpoints
 
-### 🐊 **Safe Shell Execution**
-- **Command Security**: Filters dangerous operations (rm -rf, sudo, etc.)
-- **Virtual Environment**: Inherits activated environment settings
-- **Timeout Control**: Configurable execution timeouts
-- **Working Directory**: Custom execution contexts
-
-### 🎬 **Mathematical Animation (Manim)**
-- **Manim Integration**: Create stunning mathematical animations
-- **Quality Control**: Multiple quality presets (low, medium, high, production)
-- **Video Generation**: Auto-saves MP4 animations to artifacts
-- **Example Library**: Built-in examples for common animations
+### 🔒 **Security & Safety**
+- **Command Filtering**: Blocks dangerous operations
+- **Sandboxed Execution**: Isolated environment
+- **Timeout Control**: Configurable execution limits
+- **Resource Monitoring**: Memory and CPU usage tracking
 
 ### 🔌 **MCP Integration**
 - **Dual Transport**: HTTP and stdio support
-- **LM Studio Ready**: Drop-in integration for AI models
+- **LM Studio Ready**: Drop-in AI model integration
 - **FastMCP Powered**: Modern MCP implementation
-
-### 🚀 **Enhanced SDK (NEW)**
-- **Unified Interface**: Single API for both local and remote execution
-- **Microsandbox Integration**: Secure microVM isolation for untrusted code
-- **Multi-Language Support**: Python and Node.js execution environments
-- **Builder Pattern**: Fluent configuration API with SandboxOptions
-- **Async/Await**: Modern Python async support throughout
-- **Command Execution**: Safe shell command execution with security filtering
-- **Metrics & Monitoring**: Real-time resource usage monitoring
-- **Artifact Management**: Automatic capture and management of generated files
+- **Comprehensive Tools**: 12+ available MCP tools
 
 ## 📦 Installation
 
@@ -431,153 +425,40 @@ FastMCP-powered server with:
 - **Streaming Support**: Ready for real-time interaction
 - **Error Handling**: Structured error responses
 
-## Testing
+## 📚 Documentation
 
-### Run All Tests
+For comprehensive usage information, troubleshooting guides, and advanced features:
+
+- **[FAQ and Limitations](docs/FAQ_AND_LIMITATIONS.md)** - Common issues and sandbox restrictions
+- **[Enhanced Features Guide](ENHANCED_FEATURES.md)** - Advanced capabilities and examples
+- **[API Reference](src/sandbox/)** - Complete API documentation
+
+## 🧪 Testing
+
+Run the test suite to verify installation:
+
 ```bash
-# Using uv
-uv run pytest
-
-# Using pytest directly
-pytest tests/ -v
-
-# Using unittest
-python -m unittest tests.test_integration -v
+uv run pytest tests/ -v
 ```
 
-### Test Categories
+Test categories include:
+- Package import and sys.path tests
+- Error handling and ImportError reporting
+- Artifact capture (matplotlib/PIL)
+- Web application launching
+- Virtual environment detection
 
-1. **Package Import Tests**: Verify absolute import functionality
-2. **sys.path Tests**: Ensure correct path configuration
-3. **Error Handling Tests**: Enhanced ImportError reporting
-4. **Artifact Tests**: Matplotlib and PIL integration
-5. **Web App Tests**: Flask and Streamlit launching
-6. **Environment Tests**: Virtual environment detection
+## 🤝 Contributing
 
-## Configuration
+1. Fork the repository
+2. Create a feature branch
+3. Run tests: `uv run pytest`
+4. Submit a pull request
 
-### pyproject.toml Features
-
-- **Entry Points**: CLI command definitions
-- **Package Discovery**: Automatic package detection
-- **Build System**: Hatchling backend configuration
-- **Test Configuration**: pytest integration
-- **Dependencies**: FastMCP, matplotlib, Pillow
-
-### Environment Variables
-
-- `VIRTUAL_ENV`: Set automatically when `.venv` detected
-- `PATH`: Modified to include `.venv/bin`
-- Standard Python environment variables supported
-
-## Error Handling
-
-### Enhanced ImportError Reporting
-
-When imports fail, detailed information is provided:
-```json
-{
-  "type": "ImportError",
-  "message": "No module named 'nonexistent'",
-  "module": "nonexistent",
-  "traceback": "Full traceback...",
-  "sys_path": ["path1", "path2", "..."],
-  "attempted_paths": ["existing_path1", "existing_path2"]
-}
+For development setup:
+```bash
+uv venv && uv pip install -e ".[dev]"
 ```
-
-### General Exception Handling
-
-All exceptions include:
-- Exception type and message
-- Full traceback
-- Execution context information
-- sys.path snapshot
-
-## Integration with LM Studio
-
-### MCP Configuration
-
-Add to LM Studio MCP settings:
-```json
-{
-  "mcpServers": {
-    "sandbox": {
-      "command": "sandbox-server-stdio",
-      "args": []
-    }
-  }
-}
-```
-
-### Available Tools in LM Studio
-
-- `execute`: Run Python code with full feature set
-- `list_artifacts`: View generated artifacts
-- `cleanup_artifacts`: Clean up temporary files  
-- `get_execution_info`: Environment diagnostics
-- `start_repl`: Interactive session (simulated)
-- `start_web_app`: Launch web applications
-- `cleanup_temp_artifacts`: Maintenance operations
-
-## Development
-
-### Adding New Features
-
-1. **Update ExecutionContext**: Add new environment setup
-2. **Create MCP Tools**: Add new `@mcp.tool` decorated functions  
-3. **Update Tests**: Add test cases in `test_integration.py`
-4. **Update Documentation**: Document new functionality
-
-### Code Style
-
-- Follow existing patterns for error handling
-- Use structured JSON returns for tool functions
-- Maintain backward compatibility
-- Add comprehensive logging
-
-## Troubleshooting
-
-### Import Issues
-- Check `get_execution_info()` for sys.path configuration
-- Verify virtual environment activation
-- Ensure package is installed in development mode (`pip install -e .`)
-
-### Virtual Environment Issues
-- Confirm `.venv` directory exists
-- Check Python version compatibility
-- Verify `VIRTUAL_ENV` environment variable
-
-### Artifact Issues
-- Ensure temporary directory is writable
-- Check matplotlib/PIL installation
-- Verify artifact cleanup is working
-
-### Web App Issues
-- Confirm Flask/Streamlit installation
-- Check port availability (8000-8099 range)
-- Verify firewall settings
-
-### Manim Animation Issues
-- Ensure Manim is installed in the virtual environment (`uv pip install manim`)
-- Check that `manim` executable is available in `.venv/bin/`
-- Verify video codec dependencies for MP4 generation
-- Confirm temporary directory has sufficient space for video files
-- Check animation timeout (default 5 minutes) for complex scenes
-
-## Contributing
-
-1. **Setup Development Environment**:
-   ```bash
-   uv venv
-   uv pip install -e ".[dev]"
-   ```
-
-2. **Run Tests**: Ensure all tests pass before submitting changes
-
-3. **Follow Patterns**: Use existing code patterns for consistency
-
-4. **Update Documentation**: Keep README and docstrings current
 
 ## License
 
