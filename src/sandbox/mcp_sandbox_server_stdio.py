@@ -1448,6 +1448,7 @@ def start_enhanced_repl() -> str:
         # Check if IPython is available
         try:
             import IPython
+            from IPython.terminal.interactiveshell import TerminalInteractiveShell
             ipython_available = True
             ipython_version = IPython.__version__
         except ImportError:
@@ -1480,31 +1481,171 @@ def start_enhanced_repl() -> str:
         except (socket.error, OSError):
             network_available = False
         
+        # Start IPython session if available
+        if ipython_available:
+            try:
+                # Create IPython shell with custom configuration
+                shell = TerminalInteractiveShell.instance()
+                
+                # Set up custom namespace with sandbox context
+                shell.user_ns.update(ctx.execution_globals)
+                shell.user_ns['ctx'] = ctx
+                shell.user_ns['artifacts_dir'] = ctx.artifacts_dir
+                
+                # Define custom magic commands
+                def artifacts_magic(line):
+                    """List and manage artifacts."""
+                    if not line.strip():
+                        return list_artifacts()
+                    elif line.strip() == 'backup':
+                        return backup_current_artifacts()
+                    elif line.strip().startswith('backup '):
+                        backup_name = line.strip()[7:]
+                        return backup_current_artifacts(backup_name)
+                    elif line.strip() == 'list_backups':
+                        return list_artifact_backups()
+                    else:
+                        return "Usage: %artifacts [backup [name] | list_backups]"
+                
+                def install_magic(line):
+                    """Install packages."""
+                    if not line.strip():
+                        return "Usage: %install package_name [version]"
+                    parts = line.strip().split()
+                    package_name = parts[0]
+                    version = parts[1] if len(parts) > 1 else None
+                    return install_package(package_name, version)
+                
+                def packages_magic(line):
+                    """List installed packages."""
+                    return list_installed_packages()
+                
+                def env_info_magic(line):
+                    """Show environment information."""
+                    return get_execution_info()
+                
+                def manim_magic(line):
+                    """Execute Manim animations."""
+                    if not line.strip():
+                        return get_manim_examples()
+                    else:
+                        return create_manim_animation(line.strip())
+                
+                # Register magic commands
+                shell.register_magic_function(artifacts_magic, 'line', 'artifacts')
+                shell.register_magic_function(install_magic, 'line', 'install')
+                shell.register_magic_function(packages_magic, 'line', 'packages')
+                shell.register_magic_function(env_info_magic, 'line', 'env_info')
+                shell.register_magic_function(manim_magic, 'line', 'manim')
+                
+                # Configure IPython settings
+                shell.colors = 'Linux'  # Enable syntax highlighting
+                shell.confirm_exit = False
+                shell.history_manager.enabled = True
+                
+                # Set up matplotlib for inline plotting if available
+                try:
+                    import matplotlib
+                    matplotlib.use('Agg')
+                    shell.run_line_magic('matplotlib', 'inline')
+                except ImportError:
+                    pass
+                
+                # Welcome message
+                welcome_msg = f"""
+Welcome to Enhanced Sandbox REPL!
+IPython {ipython_version} - Python {sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}
+
+Custom Magic Commands:
+  %artifacts      - Manage artifacts
+  %install pkg    - Install packages
+  %packages       - List installed packages
+  %env_info       - Environment information
+  %manim [code]   - Manim animations
+
+Network: {'Available' if network_available else 'Blocked'}
+Packages: {len([p for p in packages_status.values() if p == 'available'])}/{len(packages_status)} available
+Artifacts: {str(ctx.artifacts_dir) if ctx.artifacts_dir else 'None'}
+"""
+                
+                print(welcome_msg)
+                
+                # Start the IPython session
+                # Note: This would normally block, but in MCP context we return info
+                repl_info = {
+                    'status': 'ipython_repl_started',
+                    'ipython_available': True,
+                    'ipython_version': ipython_version,
+                    'network_available': network_available,
+                    'features': {
+                        'tab_completion': True,
+                        'history': True,
+                        'magic_commands': True,
+                        'syntax_highlighting': True,
+                        'artifact_management': True,
+                        'manim_support': True,
+                        'virtual_env': ctx.venv_path.exists(),
+                        'package_installation': ctx.venv_path.exists(),
+                        'network_access': network_available,
+                        'custom_magics': True
+                    },
+                    'available_magic_commands': [
+                        '%artifacts - List and manage artifacts',
+                        '%install pkg - Install packages',
+                        '%packages - List installed packages',
+                        '%env_info - Show environment information',
+                        '%manim [code] - Execute Manim animations',
+                        '%who - List variables',
+                        '%whos - Detailed variable info',
+                        '%history - Command history',
+                        '%time - Time execution',
+                        '%timeit - Benchmark code'
+                    ],
+                    'package_status': packages_status,
+                    'missing_packages': [pkg for pkg, status in packages_status.items() if status == 'not_installed'],
+                    'installed_packages': [pkg for pkg, status in packages_status.items() if status == 'available'],
+                    'globals_available': list(ctx.execution_globals.keys()),
+                    'artifacts_dir': str(ctx.artifacts_dir) if ctx.artifacts_dir else None,
+                    'virtual_env': os.environ.get('VIRTUAL_ENV'),
+                    'shell_instance': 'TerminalInteractiveShell configured',
+                    'message': f'IPython {ipython_version} REPL started with custom magic commands and artifact management'
+                }
+                
+                return json.dumps(repl_info, indent=2)
+                
+            except Exception as e:
+                # Fall back to basic info if IPython setup fails
+                repl_info = {
+                    'status': 'ipython_setup_failed',
+                    'ipython_available': True,
+                    'ipython_version': ipython_version,
+                    'error': str(e),
+                    'message': f'IPython available but setup failed: {str(e)}. Falling back to basic info.'
+                }
+                return json.dumps(repl_info, indent=2)
+        
+        # Fallback for when IPython is not available
         repl_info = {
-            'status': 'repl_started',
-            'ipython_available': ipython_available,
-            'ipython_version': ipython_version,
+            'status': 'basic_repl_started',
+            'ipython_available': False,
+            'ipython_version': None,
             'network_available': network_available,
             'features': {
-                'tab_completion': ipython_available,
-                'history': ipython_available,
-                'magic_commands': ipython_available,
-                'syntax_highlighting': ipython_available,
+                'tab_completion': False,
+                'history': False,
+                'magic_commands': False,
+                'syntax_highlighting': False,
                 'artifact_management': True,
                 'manim_support': True,
                 'virtual_env': ctx.venv_path.exists(),
                 'package_installation': ctx.venv_path.exists(),
                 'network_access': network_available
             },
-            'available_magic_commands': [
-                '%artifacts - List and manage artifacts',
-                '%manim - Execute Manim animations',
-                '%save_session - Save current session variables',
-                '%load_session - Load saved session',
-                '%clear_cache - Clear compilation cache',
-                '%env_info - Show environment information',
-                '%install - Install packages (if network available)',
-                '%packages - List installed packages'
+            'available_commands': [
+                'Use execute() function to run Python code',
+                'Use install_package() to install packages',
+                'Use list_artifacts() to manage artifacts',
+                'Use get_execution_info() for environment info'
             ],
             'package_status': packages_status,
             'missing_packages': [pkg for pkg, status in packages_status.items() if status == 'not_installed'],
@@ -1512,13 +1653,8 @@ def start_enhanced_repl() -> str:
             'globals_available': list(ctx.execution_globals.keys()),
             'artifacts_dir': str(ctx.artifacts_dir) if ctx.artifacts_dir else None,
             'virtual_env': os.environ.get('VIRTUAL_ENV'),
-            'sandbox_limitations': {
-                'network_access': network_available,
-                'file_system_access': 'sandboxed',
-                'external_commands': 'limited',
-                'package_installation': 'virtual_env_only'
-            },
-            'message': f'Enhanced REPL session started. IPython: {"available" if ipython_available else "not available"}, Network: {"available" if network_available else "blocked"}, Packages: {len([p for p in packages_status.values() if p == "available"])}/{len(packages_status)} available'
+            'recommendation': 'Install IPython for enhanced REPL: install_package("ipython")',
+            'message': f'Basic REPL info provided. IPython not available. Network: {"available" if network_available else "blocked"}, Packages: {len([p for p in packages_status.values() if p == "available"])}/{len(packages_status)} available'
         }
         
         return json.dumps(repl_info, indent=2)
@@ -2061,7 +2197,7 @@ def cleanup_web_app_export(export_name: str) -> str:
 
 @mcp.tool
 def install_package(package_name: str, version: str = None) -> str:
-    """Install a Python package in the virtual environment.
+    """Install a Python package in the virtual environment using uv or pip.
     
     Args:
         package_name: Name of the package to install
@@ -2092,50 +2228,123 @@ def install_package(package_name: str, version: str = None) -> str:
     else:
         package_spec = package_name
     
-    # Use pip from virtual environment
+    # Cascading fallback installation methods
+    uv_executable = shutil.which('uv')
     pip_executable = ctx.venv_path / 'bin' / 'pip'
-    if not pip_executable.exists():
+    python3_executable = shutil.which('python3') or sys.executable
+    
+    # Define installation methods in order of preference
+    installation_methods = []
+    
+    if uv_executable:
+        # Method 1: uv add (preferred for project dependency management)
+        installation_methods.append({
+            'tool': 'uv add',
+            'executable': uv_executable,
+            'command': [uv_executable, 'add', package_spec]
+        })
+        
+        # Method 2: uv pip install (fallback for uv)
+        installation_methods.append({
+            'tool': 'uv pip',
+            'executable': uv_executable,
+            'command': [uv_executable, 'pip', 'install', package_spec]
+        })
+    
+    if pip_executable.exists():
+        # Method 3: pip install (standard fallback)
+        installation_methods.append({
+            'tool': 'pip',
+            'executable': str(pip_executable),
+            'command': [str(pip_executable), 'install', package_spec]
+        })
+    
+    if python3_executable:
+        # Method 4: python3 -m pip install (final fallback)
+        installation_methods.append({
+            'tool': 'python3 -m pip',
+            'executable': python3_executable,
+            'command': [python3_executable, '-m', 'pip', 'install', package_spec]
+        })
+    
+    if not installation_methods:
         return json.dumps({
             'status': 'error',
-            'message': 'pip not found in virtual environment'
+            'message': 'No installation tools found. Cannot install packages.'
         }, indent=2)
     
-    try:
-        # Install package
-        install_result = subprocess.run(
-            [str(pip_executable), 'install', package_spec],
-            capture_output=True,
-            text=True,
-            timeout=300  # 5 minute timeout
-        )
-        
-        if install_result.returncode == 0:
-            return json.dumps({
-                'status': 'success',
-                'package': package_name,
-                'version': version,
-                'install_output': install_result.stdout,
-                'message': f'Successfully installed {package_spec}'
-            }, indent=2)
-        else:
-            return json.dumps({
-                'status': 'error',
-                'package': package_name,
-                'install_output': install_result.stdout,
-                'install_error': install_result.stderr,
-                'message': f'Failed to install {package_spec}'
-            }, indent=2)
+    # Try each installation method in order
+    last_error = None
+    attempts = []
+    
+    for method in installation_methods:
+        try:
+            # Set up environment for package installation
+            env = os.environ.copy()
+            env['VIRTUAL_ENV'] = str(ctx.venv_path)
             
-    except subprocess.TimeoutExpired:
-        return json.dumps({
-            'status': 'error',
-            'message': f'Installation of {package_spec} timed out'
-        }, indent=2)
-    except Exception as e:
-        return json.dumps({
-            'status': 'error',
-            'message': f'Failed to install {package_spec}: {str(e)}'
-        }, indent=2)
+            # Attempt installation
+            install_result = subprocess.run(
+                method['command'],
+                capture_output=True,
+                text=True,
+                timeout=300,  # 5 minute timeout
+                env=env
+            )
+            
+            attempts.append({
+                'method': method['tool'],
+                'success': install_result.returncode == 0,
+                'stdout': install_result.stdout,
+                'stderr': install_result.stderr
+            })
+            
+            if install_result.returncode == 0:
+                return json.dumps({
+                    'status': 'success',
+                    'package': package_name,
+                    'version': version,
+                    'installer_used': method['tool'],
+                    'install_output': install_result.stdout,
+                    'attempts': attempts,
+                    'message': f'Successfully installed {package_spec} using {method["tool"]}'
+                }, indent=2)
+            else:
+                last_error = {
+                    'method': method['tool'],
+                    'stdout': install_result.stdout,
+                    'stderr': install_result.stderr
+                }
+                
+        except subprocess.TimeoutExpired:
+            attempts.append({
+                'method': method['tool'],
+                'success': False,
+                'error': f'Installation timed out after 300 seconds'
+            })
+            last_error = {
+                'method': method['tool'],
+                'error': 'Installation timed out'
+            }
+        except Exception as e:
+            attempts.append({
+                'method': method['tool'],
+                'success': False,
+                'error': str(e)
+            })
+            last_error = {
+                'method': method['tool'],
+                'error': str(e)
+            }
+    
+    # All methods failed
+    return json.dumps({
+        'status': 'error',
+        'package': package_name,
+        'attempts': attempts,
+        'last_error': last_error,
+        'message': f'Failed to install {package_spec} using all available methods: {[m["tool"] for m in installation_methods]}'
+    }, indent=2)
 
 @mcp.tool
 def list_installed_packages() -> str:
