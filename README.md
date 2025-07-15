@@ -10,9 +10,16 @@
 
 See the Sandbox MCP server creating beautiful mathematical animations with Manim:
 
-![Manim Animation Demo](examples/SquareToCircle.mp4)
+<div align="center">
+  <video width="640" height="480" controls autoplay muted loop>
+    <source src="examples/SquareToCircle.mp4" type="video/mp4">
+    <img src="examples/SquareToCircle.gif" alt="Manim Animation Demo" width="640" height="480">
+  </video>
+</div>
 
-*Example: Square transforming into circle animation generated automatically by the sandbox*
+**Alternative formats**: [MP4 Video](examples/SquareToCircle.mp4) | [GIF Animation](examples/SquareToCircle.gif)
+
+*Example: 3D mathematical animation generated automatically by the sandbox*
 
 ## 🚀 Quick Start
 
