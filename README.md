@@ -6,6 +6,14 @@
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.10.5-green.svg)](https://github.com/jlowin/fastmcp)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
+## 🎬 Demo: Manim Animation in Action
+
+See the Sandbox MCP server creating beautiful mathematical animations with Manim:
+
+![Manim Animation Demo](artifact_backups/post_ipython_backup_20250714_191706/manim_8f35fb11/media/videos/scene/720p30/SquareToCircle.mp4)
+
+*Example: Square transforming into circle animation generated automatically by the sandbox*
+
 ## 🚀 Quick Start
 
 ```bash
