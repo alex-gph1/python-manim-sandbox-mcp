@@ -9,7 +9,7 @@ The Python Sandbox provides a secure, isolated environment for executing Python 
 ### 1. Environment and Setup
 
 **Q: What Python version does the sandbox use?**
-A: The sandbox runs Python 3.11+ in a dedicated virtual environment located at `/home/stan/Prod/sandbox/.venv`.
+A: The sandbox runs Python 3.11+ in a dedicated virtual environment located at `/home/usr/sandbox/.venv`.
 
 **Q: What libraries are pre-installed?**
 A: Core libraries include:
