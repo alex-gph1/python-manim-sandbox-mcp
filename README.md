@@ -66,7 +66,21 @@ uv run sandbox-server-stdio
 - Python 3.9+
 - uv (recommended) or pip
 
-### Using uv (Recommended)
+### Method 1: Direct Git Installation (Recommended)
+
+For immediate use with AI applications like LM Studio, Claude Desktop, or VS Code:
+
+```bash
+uvx git+https://github.com/scooter-lacroix/sandbox-mcp.git
+```
+
+This automatically installs and runs the MCP server without manual setup.
+
+### Method 2: Local Development Installation
+
+For development, customization, or contributing:
+
+#### Using uv (Recommended)
 
 ```bash
 git clone https://github.com/scooter-lacroix/sandbox-mcp.git
@@ -75,7 +89,7 @@ uv venv
 uv pip install -e .
 ```
 
-### Using pip
+#### Using pip
 
 ```bash
 git clone https://github.com/scooter-lacroix/sandbox-mcp.git
@@ -84,6 +98,18 @@ python -m venv .venv
 source .venv/bin/activate  # Linux/Mac
 # .venv\Scripts\activate  # Windows
 pip install -e .
+```
+
+### Method 3: Package Installation
+
+Install from package manager (when available):
+
+```bash
+# Using uv
+uvx sandbox-mcp
+
+# Using pip
+pip install sandbox-mcp
 ```
 
 ## 🖥️ Usage
@@ -98,16 +124,108 @@ sandbox-server
 sandbox-server-stdio
 ```
 
-### LM Studio Integration
+### MCP Integration
 
-Add to your LM Studio MCP configuration:
+The Sandbox MCP server supports multiple integration methods:
+
+#### Method 1: Direct Git Integration (Recommended)
+
+For LM Studio, Claude Desktop, VS Code, and other MCP-compatible applications:
+
+```json
+{
+  "mcpServers": {
+    "sandbox": {
+      "command": "uvx",
+      "args": ["git+https://github.com/scooter-lacroix/sandbox-mcp.git"],
+      "env": {},
+      "start_on_launch": true
+    }
+  }
+}
+```
+
+#### Method 2: Local Installation
+
+For locally installed versions:
 
 ```json
 {
   "mcpServers": {
     "sandbox": {
       "command": "sandbox-server-stdio",
-      "args": []
+      "args": [],
+      "env": {},
+      "start_on_launch": true
+    }
+  }
+}
+```
+
+#### Method 3: HTTP Server Mode
+
+For web-based integrations:
+
+```bash
+# Start HTTP server
+python -m sandbox.mcp_sandbox_server --port 8765
+```
+
+Then configure your application:
+
+```json
+{
+  "mcpServers": {
+    "sandbox": {
+      "transport": "http",
+      "url": "http://localhost:8765/mcp",
+      "headers": {
+        "Authorization": "Bearer your-token-here"
+      }
+    }
+  }
+}
+```
+
+#### Application-Specific Configurations
+
+**VS Code/Cursor/Windsurf** (using MCP extension):
+```json
+{
+  "mcp.servers": {
+    "sandbox": {
+      "command": "sandbox-server-stdio",
+      "args": [],
+      "env": {},
+      "transport": "stdio"
+    }
+  }
+}
+```
+
+**Jan AI**:
+```json
+{
+  "mcp_servers": {
+    "sandbox": {
+      "command": "sandbox-server-stdio",
+      "args": [],
+      "env": {}
+    }
+  }
+}
+```
+
+**OpenHands**:
+```json
+{
+  "mcp": {
+    "servers": {
+      "sandbox": {
+        "command": "sandbox-server-stdio",
+        "args": [],
+        "env": {}
+      }
     }
   }
 }

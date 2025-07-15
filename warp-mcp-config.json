@@ -1,0 +1,30 @@
+{
+  "mcpServers": {
+    "Context7": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ],
+      "env": {},
+      "working_directory": null,
+      "start_on_launch": true
+    },
+    "code-index": {
+      "command": "uvx",
+      "args": [
+        "git+https://github.com/scooter-lacroix/code-index-mcp.git"
+      ],
+      "env": {},
+      "working_directory": null,
+      "start_on_launch": true
+    },
+    "sandbox": {
+      "command": "/home/stan/Prod/sandbox/.venv/bin/sandbox-server-stdio",
+      "args": [],
+      "env": {},
+      "working_directory": "/home/stan/Prod/sandbox",
+      "start_on_launch": true
+    }
+  }
+}
