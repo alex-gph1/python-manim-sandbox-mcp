@@ -33,6 +33,20 @@ Thumbs.db
 *.log
 logs/
 
+# Test files and personal configs
+test_*.py
+debug_*.py
+*-config.json
+*config.json
+system-prompts.md
+complete-system-prompt.md
+manim-latex-setup-summary.md
+media/
+test_artifact/
+*.aux
+*.dvi
+test.log
+
 # OS generated files
 .DS_Store
 .DS_Store?

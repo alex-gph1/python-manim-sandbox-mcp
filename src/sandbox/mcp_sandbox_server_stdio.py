@@ -121,6 +121,10 @@ class ExecutionContext:
     
     def create_artifacts_dir(self) -> str:
         """Create a structured directory for execution artifacts within the project."""
+        # If artifacts directory already exists, reuse it
+        if self.artifacts_dir and self.artifacts_dir.exists():
+            return str(self.artifacts_dir)
+        
         execution_id = str(uuid.uuid4())[:8]
         # Create artifacts directory within project
         artifacts_root = self.project_root / "artifacts"
@@ -303,26 +307,75 @@ resource_manager = get_resource_manager()
 security_manager = get_security_manager(SecurityLevel.MEDIUM)
 
 def monkey_patch_matplotlib():
-    """Monkey patch matplotlib to save plots to artifacts directory."""
+    """Monkey patch matplotlib to save plots to artifacts directory with fallback backends."""
     try:
         import matplotlib
-        matplotlib.use('Agg')  # Use non-interactive backend
+        
+        # Try multiple backends in order of preference
+        backends = ['Agg', 'svg', 'pdf', 'ps', 'Cairo']
+        backend_set = False
+        
+        for backend in backends:
+            try:
+                matplotlib.use(backend, force=True)
+                logger.info(f"Successfully set matplotlib backend to: {backend}")
+                backend_set = True
+                break
+            except Exception as backend_error:
+                logger.warning(f"Failed to set backend {backend}: {backend_error}")
+                continue
+        
+        if not backend_set:
+            logger.warning("No matplotlib backend could be set, using default")
+            
+        # Log final backend info
+        try:
+            current_backend = matplotlib.get_backend()
+            logger.info(f"Final matplotlib backend: {current_backend}")
+        except Exception as e:
+            logger.error(f"Error getting current backend: {e}")
+            
         import matplotlib.pyplot as plt
         
         original_show = plt.show
         
         def patched_show(*args, **kwargs):
-            if ctx.artifacts_dir:
-                plots_dir = ctx.artifacts_dir / "plots"
-                plots_dir.mkdir(exist_ok=True)
-                figure_path = plots_dir / f"plot_{uuid.uuid4().hex[:8]}.png"
-                plt.savefig(figure_path, dpi=150, bbox_inches='tight')
-                logger.info(f"Plot saved to: {figure_path}")
-            return original_show(*args, **kwargs)
+            try:
+                if ctx.artifacts_dir:
+                    plots_dir = ctx.artifacts_dir / "plots"
+                    plots_dir.mkdir(exist_ok=True)
+                    figure_path = plots_dir / f"plot_{uuid.uuid4().hex[:8]}.png"
+                    
+                    # Try different save formats as fallback
+                    save_formats = [('png', 'PNG'), ('svg', 'SVG'), ('pdf', 'PDF')]
+                    saved = False
+                    
+                    for ext, format_name in save_formats:
+                        try:
+                            save_path = plots_dir / f"plot_{uuid.uuid4().hex[:8]}.{ext}"
+                            plt.savefig(save_path, dpi=150, bbox_inches='tight', format=ext)
+                            logger.info(f"Image saved to artifacts: {save_path}")
+                            saved = True
+                            break
+                        except Exception as save_error:
+                            logger.warning(f"Failed to save as {format_name}: {save_error}")
+                            continue
+                    
+                    if not saved:
+                        logger.error("Failed to save plot in any format")
+                        
+                return original_show(*args, **kwargs)
+            except Exception as e:
+                logger.error(f"Error in patched_show: {e}")
+                return original_show(*args, **kwargs)
         
         plt.show = patched_show
         return True
     except ImportError:
+        logger.warning("Matplotlib not available for monkey patching")
+        return False
+    except Exception as e:
+        logger.error(f"Critical error in matplotlib monkey patch: {e}")
         return False
 
 def execute_manim_code(manim_code: str, quality: str = 'medium_quality') -> Dict[str, Any]:
@@ -345,7 +398,8 @@ def execute_manim_code(manim_code: str, quality: str = 'medium_quality') -> Dict
         'animation_id': animation_id,
         'artifacts_dir': str(manim_dir),
         'scenes_found': [],
-        'execution_time': 0
+        'execution_time': 0,
+        'warning': None
     }
     
     start_time = time.time()
@@ -932,7 +986,54 @@ def execute(code: str, interactive: bool = False, web_app_type: Optional[str] = 
                     return json.dumps(result, indent=2)
                 
                 raise
-            exec(code, ctx.execution_globals)
+            
+            # Execute with additional protection for low-level crashes
+            try:
+                import signal
+                import multiprocessing
+                import threading
+                
+                # Set up signal handlers for common crash signals
+                def signal_handler(signum, frame):
+                    logger.error(f"Signal {signum} received during execution")
+                    raise RuntimeError(f"Code execution interrupted by signal {signum}")
+                
+                # Save old signal handlers
+                old_handlers = {}
+                for sig in [signal.SIGSEGV, signal.SIGFPE, signal.SIGILL]:
+                    try:
+                        old_handlers[sig] = signal.signal(sig, signal_handler)
+                    except (ValueError, OSError):
+                        # Some signals might not be settable
+                        pass
+                
+                try:
+                    # Execute the code
+                    exec(code, ctx.execution_globals)
+                    logger.debug("Code execution completed successfully")
+                except Exception as exec_error:
+                    logger.error(f"Exception during code execution: {exec_error}")
+                    logger.error(f"Exception type: {type(exec_error).__name__}")
+                    raise
+                finally:
+                    # Restore old signal handlers
+                    for sig, old_handler in old_handlers.items():
+                        try:
+                            signal.signal(sig, old_handler)
+                        except (ValueError, OSError):
+                            pass
+                            
+            except RuntimeError as e:
+                if "signal" in str(e).lower():
+                    result['error'] = {
+                        'type': 'SystemError',
+                        'message': f'Code execution caused a system-level error: {str(e)}',
+                        'suggestion': 'This may be due to incompatible libraries or CPU instruction issues. Try simpler code or different libraries.'
+                    }
+                    result['stderr'] = f"System error: {str(e)}\n\nThis often indicates library compatibility issues or CPU instruction problems."
+                    return json.dumps(result, indent=2)
+                else:
+                    raise
         
         # Interactive REPL mode
         if interactive:

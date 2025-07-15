@@ -19,7 +19,27 @@ from collections import OrderedDict
 import sqlite3
 import base64
 
+
 logger = logging.getLogger(__name__)
+
+class DirectoryChangeMonitor:
+    def __init__(self, default_working_dir: Path, home_dir: Path):
+        self.current_dir = default_working_dir
+        self.default_dir = default_working_dir
+        self.home_dir = home_dir
+
+    def change_directory(self, new_dir: Path):
+        if new_dir.resolve() != self.default_dir.resolve() and not new_dir.resolve().is_relative_to(self.home_dir):
+            logger.warning(f"Unauthorized attempt to change directory: {new_dir}")
+            raise PermissionError(f"Cannot change to directory outside home: {new_dir}")
+        logger.info(f"Changing directory from {self.current_dir} to {new_dir}")
+        self.current_dir = new_dir
+
+    def reset_to_default(self):
+        logger.info(f"Resetting to default directory: {self.default_dir}")
+        self.current_dir = self.default_dir
+
+
 
 
 class PersistentExecutionContext:
@@ -41,6 +61,13 @@ class PersistentExecutionContext:
         self.session_dir = self.project_root / "sessions" / self.session_id
         self.artifacts_dir = self.session_dir / "artifacts"
         self.state_file = self.session_dir / "state.db"
+        
+        # Directory monitoring and security
+        self.home_dir = Path.home()
+        self.directory_monitor = DirectoryChangeMonitor(
+            default_working_dir=self.artifacts_dir,
+            home_dir=self.home_dir
+        )
         
         # Performance tracking
         self.execution_times = []
@@ -646,6 +673,238 @@ class PersistentExecutionContext:
             logger.info(f"Error details saved to: {error_file}")
         except Exception as e:
             logger.error(f"Failed to save error details: {e}")
+    
+    def change_working_directory(self, path: str, temporary: bool = False) -> Dict[str, Any]:
+        """
+        Change the working directory with security checks and logging.
+        
+        Args:
+            path: The new directory path
+            temporary: Whether this is a temporary change (returns to default after operation)
+            
+        Returns:
+            Dictionary containing operation result and current directory info
+        """
+        try:
+            new_path = Path(path).resolve()
+            
+            # Security check through directory monitor
+            self.directory_monitor.change_directory(new_path)
+            
+            # Change actual working directory
+            original_cwd = os.getcwd()
+            os.chdir(new_path)
+            
+            logger.info(f"Changed working directory to: {new_path}")
+            
+            return {
+                'success': True,
+                'current_directory': str(new_path),
+                'previous_directory': original_cwd,
+                'is_default': new_path == self.directory_monitor.default_dir,
+                'is_temporary': temporary
+            }
+            
+        except PermissionError as e:
+            logger.error(f"Permission denied changing directory: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'current_directory': os.getcwd()
+            }
+        except Exception as e:
+            logger.error(f"Error changing directory: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'current_directory': os.getcwd()
+            }
+    
+    def list_directory(self, path: Optional[str] = None, include_hidden: bool = False) -> Dict[str, Any]:
+        """
+        List contents of a directory with security checks.
+        
+        Args:
+            path: Directory to list (defaults to current directory)
+            include_hidden: Whether to include hidden files
+            
+        Returns:
+            Dictionary containing directory contents and metadata
+        """
+        try:
+            target_path = Path(path) if path else Path.cwd()
+            target_path = target_path.resolve()
+            
+            # Security check
+            if not target_path.is_relative_to(self.home_dir):
+                raise PermissionError(f"Cannot access directory outside home: {target_path}")
+            
+            if not target_path.exists():
+                return {
+                    'success': False,
+                    'error': f"Directory does not exist: {target_path}",
+                    'path': str(target_path)
+                }
+            
+            items = []
+            for item in target_path.iterdir():
+                if not include_hidden and item.name.startswith('.'):
+                    continue
+                    
+                try:
+                    stat = item.stat()
+                    items.append({
+                        'name': item.name,
+                        'type': 'directory' if item.is_dir() else 'file',
+                        'size': stat.st_size if item.is_file() else None,
+                        'modified': stat.st_mtime,
+                        'permissions': oct(stat.st_mode)[-3:]
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to get info for {item}: {e}")
+            
+            logger.info(f"Listed directory: {target_path} ({len(items)} items)")
+            
+            return {
+                'success': True,
+                'path': str(target_path),
+                'items': sorted(items, key=lambda x: (x['type'], x['name'])),
+                'total_items': len(items)
+            }
+            
+        except PermissionError as e:
+            logger.error(f"Permission denied listing directory: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'path': str(target_path) if 'target_path' in locals() else path
+            }
+        except Exception as e:
+            logger.error(f"Error listing directory: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'path': str(target_path) if 'target_path' in locals() else path
+            }
+    
+    def find_files(self, pattern: str, search_path: Optional[str] = None, max_results: int = 100) -> Dict[str, Any]:
+        """
+        Find files matching a pattern with security checks.
+        
+        Args:
+            pattern: Glob pattern to search for
+            search_path: Directory to search in (defaults to current directory)
+            max_results: Maximum number of results to return
+            
+        Returns:
+            Dictionary containing search results
+        """
+        try:
+            base_path = Path(search_path) if search_path else Path.cwd()
+            base_path = base_path.resolve()
+            
+            # Security check
+            if not base_path.is_relative_to(self.home_dir):
+                raise PermissionError(f"Cannot search directory outside home: {base_path}")
+            
+            matches = []
+            for file_path in base_path.glob(pattern):
+                if len(matches) >= max_results:
+                    break
+                    
+                try:
+                    stat = file_path.stat()
+                    matches.append({
+                        'path': str(file_path),
+                        'relative_path': str(file_path.relative_to(base_path)),
+                        'name': file_path.name,
+                        'type': 'directory' if file_path.is_dir() else 'file',
+                        'size': stat.st_size if file_path.is_file() else None,
+                        'modified': stat.st_mtime
+                    })
+                except Exception as e:
+                    logger.warning(f"Failed to get info for {file_path}: {e}")
+            
+            logger.info(f"Found {len(matches)} files matching pattern '{pattern}' in {base_path}")
+            
+            return {
+                'success': True,
+                'pattern': pattern,
+                'search_path': str(base_path),
+                'matches': matches,
+                'total_matches': len(matches),
+                'truncated': len(matches) >= max_results
+            }
+            
+        except PermissionError as e:
+            logger.error(f"Permission denied searching files: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'pattern': pattern,
+                'search_path': str(base_path) if 'base_path' in locals() else search_path
+            }
+        except Exception as e:
+            logger.error(f"Error searching files: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'pattern': pattern,
+                'search_path': str(base_path) if 'base_path' in locals() else search_path
+            }
+    
+    def reset_to_default_directory(self) -> Dict[str, Any]:
+        """
+        Reset working directory to the default sandbox area.
+        
+        Returns:
+            Dictionary containing operation result
+        """
+        try:
+            self.directory_monitor.reset_to_default()
+            os.chdir(self.directory_monitor.default_dir)
+            
+            logger.info(f"Reset to default directory: {self.directory_monitor.default_dir}")
+            
+            return {
+                'success': True,
+                'current_directory': str(self.directory_monitor.default_dir),
+                'message': 'Reset to default sandbox directory'
+            }
+            
+        except Exception as e:
+            logger.error(f"Error resetting directory: {e}")
+            return {
+                'success': False,
+                'error': str(e),
+                'current_directory': os.getcwd()
+            }
+    
+    def get_current_directory_info(self) -> Dict[str, Any]:
+        """
+        Get information about the current working directory.
+        
+        Returns:
+            Dictionary containing current directory information
+        """
+        try:
+            current_dir = Path.cwd()
+            
+            return {
+                'current_directory': str(current_dir),
+                'default_directory': str(self.directory_monitor.default_dir),
+                'home_directory': str(self.home_dir),
+                'is_default': current_dir == self.directory_monitor.default_dir,
+                'is_in_home': current_dir.is_relative_to(self.home_dir),
+                'artifacts_directory': str(self.artifacts_dir)
+            }
+            
+        except Exception as e:
+            logger.error(f"Error getting directory info: {e}")
+            return {
+                'error': str(e),
+                'current_directory': os.getcwd()
+            }
     
     def cleanup(self):
         """Clean up resources and save state."""
