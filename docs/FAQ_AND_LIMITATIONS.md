@@ -23,7 +23,7 @@ A: Core libraries include:
 - `jupyter` - Interactive computing
 
 **Q: Can I install additional packages?**
-A: No, the sandbox environment is read-only for security. All commonly needed packages are pre-installed.
+A: Yes, while all commonly needed packages are pre-installed, the install commands can be used to safely install packaged that do not require sudo permissions.
 
 ### 2. Code Execution
 
@@ -54,7 +54,7 @@ A: Default timeout is 30 seconds for Python code and 10 seconds for shell comman
 
 **Q: Where are artifacts stored?**
 A: Artifacts are stored in session-specific directories:
-- Base path: `/home/stan/Prod/sandbox/sessions/{session_id}/artifacts/`
+- Base path: `/home/usr/sandbox/sessions/{session_id}/artifacts/`
 - Subdirectories: `plots/`, `images/`, `videos/`, `data/`, `manim/`
 
 **Q: What file types are supported as artifacts?**
