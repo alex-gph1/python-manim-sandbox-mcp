@@ -11,10 +11,7 @@
 See the Sandbox MCP server creating beautiful mathematical animations with Manim:
 
 <div align="center">
-  <video width="640" height="480" controls autoplay muted loop>
-    <source src="examples/SquareToCircle.mp4" type="video/mp4">
-    <img src="examples/SquareToCircle.gif" alt="Manim Animation Demo" width="640" height="480">
-  </video>
+  <img src="examples/SquareToCircle.gif" alt="Manim Animation Demo" width="480" height="360">
 </div>
 
 **Alternative formats**: [MP4 Video](examples/SquareToCircle.mp4) | [GIF Animation](examples/SquareToCircle.gif)
