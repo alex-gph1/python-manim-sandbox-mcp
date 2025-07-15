@@ -47,6 +47,9 @@ test_artifact/
 *.dvi
 test.log
 
+# Allow example videos
+!examples/*.mp4
+
 # OS generated files
 .DS_Store
 .DS_Store?

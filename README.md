@@ -10,7 +10,7 @@
 
 See the Sandbox MCP server creating beautiful mathematical animations with Manim:
 
-![Manim Animation Demo](artifact_backups/post_ipython_backup_20250714_191706/manim_8f35fb11/media/videos/scene/720p30/SquareToCircle.mp4)
+![Manim Animation Demo](examples/SquareToCircle.mp4)
 
 *Example: Square transforming into circle animation generated automatically by the sandbox*
 
