@@ -1,6 +1,6 @@
 # Enhanced Sandbox SDK
 
-> Production-ready Python sandbox execution environment with comprehensive MCP server support, featuring enhanced artifact management, interactive REPL, and Manim animation capabilities.
+> Python sandbox execution environment with comprehensive MCP server support, featuring enhanced artifact management, interactive REPL, and Manim animation capabilities.
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![FastMCP](https://img.shields.io/badge/FastMCP-2.10.5-green.svg)](https://github.com/jlowin/fastmcp)
