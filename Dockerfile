@@ -1,6 +1,15 @@
 # Multi-stage build using uv for faster dependency resolution
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim AS builder
 
+# Install build dependencies needed for compiling Python packages like pycairo
+RUN apt-get update && apt-get install -y \
+    build-essential \
+    python3-dev \
+    libcairo2-dev \
+    libpango1.0-dev \
+    pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Enable bytecode compilation and copy mode for better performance
@@ -26,14 +35,12 @@ FROM python:3.12-slim-bookworm
 
 WORKDIR /app
 
-# Install system dependencies required for Manim and other features
+# Install runtime dependencies (no build tools needed here)
 RUN apt-get update && apt-get install -y \
     ffmpeg \
-    libcairo2-dev \
-    libpango1.0-dev \
-    pkg-config \
-    python3-dev \
-    build-essential \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
     curl \
     && rm -rf /var/lib/apt/lists/*
 
@@ -57,4 +64,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sandbox; print('OK')" || exit 1
 
 # Default command (can be overridden)
-CMD ["sandbox-server"]
+CMD ["sandbox-server-stdio"]
