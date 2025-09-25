@@ -55,7 +55,8 @@ ENV PATH="/app/.venv/bin:$PATH"
 
 # Create non-root user
 RUN useradd --create-home --shell /bin/bash sandbox && \
-    chown -R sandbox:sandbox /app
+    chown -R sandbox:sandbox /app && \
+    mkdir -p /sandbox_area && chown sandbox:sandbox /sandbox_area
 
 USER sandbox
 
@@ -64,4 +65,4 @@ EXPOSE 8765
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD python -c "import sandbox; print('OK')" || exit 1
 
-CMD ["sandbox-server-stdio"]
+CMD ["sandbox-server"]
