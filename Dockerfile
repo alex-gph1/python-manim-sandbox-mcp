@@ -25,7 +25,7 @@ COPY pyproject.toml uv.lock ./
 
 # Create virtual environment and install dependencies
 RUN uv venv /app/.venv && \
-    uv pip install --frozen --no-deps -r pyproject.toml
+    uv pip install --no-deps -r pyproject.toml
 
 # Copy application code
 COPY . .
